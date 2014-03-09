@@ -1,6 +1,7 @@
 #include <JeeLib.h>
 #include <GLCD_ST7565.h>
 #include <avr/pgmspace.h>
+//#include <string.h>
 GLCD_ST7565 glcd;
 
 #include <RTClib.h>                 // Real time clock (RTC) - used for software RTC to reset kWh counters at midnight
@@ -67,7 +68,30 @@ const int redLED=9;                 // Red tri-color LED
 const int LDRpin=4;    		    // analog pin of onboard lightsensor 
 int cval_use;
 
-bool isInside = true;
+bool animate10s = true;
+
+enum value_t {
+  VALUE_TEMPERATURE,
+  VALUE_POWER,
+  VALUE_ENERGY,
+  VALUE_VOLTAGE,
+  VALUE_PERCENTAGE
+};
+
+typedef struct 
+{
+  value_t valueType;
+  float   lastValue;
+  long  lastValueUpdate;
+  float minValue;
+  long  minValueUpdate;
+  float maxValue;
+  long  maxValueUpdate;
+  char textLabel[16];
+} SensorValue_t;
+
+const int BUFFER_SIZE=16;
+const int DISP_REFRESH_INTERVAL = 200;
 
 //--------------------------------------------------------------------------------------------
 // Setup
@@ -84,9 +108,10 @@ void setup()
   pinMode(redLED, OUTPUT); 
 }
 
-void displayString(char* str, int xpos, int ypos, int font, align_t align)
-{
-  int width;
+void displayString(char* str, byte xpos, byte ypos, byte font, align_t align)
+{  
+  byte width;
+
   switch (font)
   {
     case 1:
@@ -103,6 +128,7 @@ void displayString(char* str, int xpos, int ypos, int font, align_t align)
       glcd.setFont(font_metric04);
       width = 16;
   }
+
   int pos = 0;
 
   switch(align)
@@ -121,57 +147,92 @@ void displayString(char* str, int xpos, int ypos, int font, align_t align)
 
     case ALIGN_LEFT:
     break;
-  } 
+  }   
 
   glcd.drawString(xpos,ypos,str); 
-
 }
 
-
-void display_power (double power, int xpos,int ypos, int font, align_t align)
+void displayNumber(float value, char* units, byte decimalPlaces, byte xpos, byte ypos, byte font, align_t align)
 {
-  char str[50];  
-  
-  if((power > 1000) || (power < -1000))
+  char str[BUFFER_SIZE];
+
+  dtostrf(value,0,decimalPlaces,str);
+  strcat(str,units);
+
+  displayString(str,xpos,ypos,font,align); 
+}
+
+void displayValue(SensorValue_t sensorValue, byte column, byte row)
+{
+  // No bounds checking
+  byte xOffset = 64 * column;
+  byte yOffset = 20 * row;
+
+  displayString(sensorValue.textLabel,xOffset+63,yOffset,1,ALIGN_RIGHT);
+
+  switch (sensorValue.valueType)
   {
-    dtostrf(power/1000,0,1,str);
-    strcat(str,"KW");   
+    case VALUE_TEMPERATURE:
+        displayNumber(sensorValue.lastValue,"*",1,xOffset + 55,yOffset + 6,2,ALIGN_UNITS); 
+    break;
+
+    case VALUE_POWER:
+        if((sensorValue.lastValue > 1000) || (sensorValue.lastValue< -1000))
+        {
+          displayNumber(sensorValue.lastValue,"KW",1,xOffset + 47,yOffset + 6,2,ALIGN_UNITS);  
+        }
+        else
+        {
+          displayNumber(sensorValue.lastValue,"W",0,xOffset + 47,yOffset + 6,2,ALIGN_UNITS); 
+        }
+    break;
+
+    case VALUE_ENERGY:
+        displayNumber(sensorValue.lastValue,"KWH",0,xOffset + 39,yOffset + 6,2,ALIGN_UNITS); 
+    break;
+
+    case VALUE_VOLTAGE:
+        displayNumber(sensorValue.lastValue,"V",0,xOffset + 55,yOffset + 6,2,ALIGN_UNITS); 
+    break;
+
+    case VALUE_PERCENTAGE:
+    break;
   }
-  else
+
+  switch (sensorValue.valueType)
   {
-    //itoa((int)power,str,10);
-    dtostrf(power,0,0,str);
-    strcat(str,"W");   
-  }  
+    case VALUE_TEMPERATURE:
+        if (animate10s)
+        {
+          displayString("MAX",xOffset,yOffset+6,1,ALIGN_LEFT);
+          displayNumber(sensorValue.maxValue,"*",1,xOffset,yOffset+13,1,ALIGN_LEFT);          
+        }
+        else
+        {
+          displayString("MIN",xOffset,yOffset+6,1,ALIGN_LEFT);
+          displayNumber(sensorValue.minValue,"*",1,xOffset,yOffset+13,1,ALIGN_LEFT); 
+        }
+    break;
 
-  displayString(str, xpos, ypos, font, align);
-}
+    case VALUE_POWER:
+    break;
 
-void display_energy(double energy, int xpos, int ypos, int font, align_t align)
-{
-  char str[50];
+    case VALUE_ENERGY:
+    break;
 
-  dtostrf(energy,0,1,str);
-  strcat(str,"KWH");
+    case VALUE_VOLTAGE:
+    break;
 
-  displayString(str, xpos, ypos, font, align);
-}
+    case VALUE_PERCENTAGE:
+    break;
+  }
 
-void display_temp(double temp, int xpos, int ypos, int font, align_t align)
-{
-  char str[50];
-
-  dtostrf(temp,0,1,str);
-  strcat(str,"*");
-
-  displayString(str, xpos, ypos, font, align);
 }
 
 
 
 void loop()
 {
-  
   if (rf12_recvDone())
   {
     if (rf12_crc == 0 && (rf12_hdr & RF12_HDR_CTL) == 0)  // and no rf errors
@@ -247,7 +308,7 @@ void loop()
     }
   }
   
-  if ((millis()-fast_update)>200)
+  if ((millis()-fast_update)>DISP_REFRESH_INTERVAL)
   {
     fast_update = millis();
     
@@ -267,58 +328,40 @@ void loop()
 
     cval_use = cval_use + (emontx.power1 - cval_use)*0.50;        //smooth transitions
     
-    //draw_power_page( "POWER" ,cval_use, "USE", usekwh);
-    //draw_temperature_time_footer(temp, mintemp, maxtemp, hour,minute);
-
     glcd.clear();
-    glcd.drawLine(64, 0, 64, 57, WHITE);      //top vertical line
-    
-    display_power(cval_use,47,6, 2, ALIGN_UNITS);
-    displayString("TOTAL POWER",47,0,1,ALIGN_RIGHT);
+    glcd.drawLine(64, 0, 64, 57, WHITE); // dividing line
 
-    if (isInside)
-    {
-      displayString("MAX",0,6,1,ALIGN_LEFT);
-      display_power(powerMax,0,13,1,ALIGN_LEFT);
-    }
-    else
-    {
-      displayString("MIN",0,6,1,ALIGN_LEFT);
-      display_power(powerMin,0,13,1,ALIGN_LEFT);
-    }
+    SensorValue_t sensorValue;
 
-    display_temp(externalTemp,55,26, 2, ALIGN_UNITS);
-    displayString("EXT TEMP",55,20,1,ALIGN_RIGHT);
-
-    if (isInside)
-    {
-      displayString("MAX",0,26,1,ALIGN_LEFT);
-      display_temp(externalTempMax,0,33,1,ALIGN_LEFT);
-    }
-    else
-    {
-      displayString("MIN",0,26,1,ALIGN_LEFT);
-      display_temp(externalTempMin,0,33,1,ALIGN_LEFT);
-    }
-
-    display_temp(internalTemp,55,46, 2, ALIGN_UNITS);
-    displayString("INT TEMP",55,40,1,ALIGN_RIGHT);
-
-    if (isInside)
-    {
-      displayString("MAX",0,46,1,ALIGN_LEFT);
-      display_temp(internalTempMax,0,53,1,ALIGN_LEFT);
-    }
-    else
-    {
-      displayString("MIN",0,46,1,ALIGN_LEFT);
-      display_temp(internalTempMin,0,53,1,ALIGN_LEFT);
-    }
+    sensorValue.lastValue = cval_use;
+    sensorValue.valueType = VALUE_POWER;
+    strcpy(sensorValue.textLabel,"POWER");
 
 
+    displayValue(sensorValue,0,0);
 
-    display_energy(usekwh,103,6,2,ALIGN_UNITS);
-    displayString("ENERGY",103,0,1,ALIGN_RIGHT);
+    sensorValue.lastValue = externalTemp;
+    sensorValue.minValue = externalTempMin;
+    sensorValue.maxValue = externalTempMax;
+    strcpy(sensorValue.textLabel,"EXTERNAL TEMP");
+    sensorValue.valueType = VALUE_TEMPERATURE;
+
+    displayValue(sensorValue,0,1);
+
+    sensorValue.lastValue = internalTemp;
+    sensorValue.minValue = internalTempMin;
+    sensorValue.maxValue = internalTempMax;
+    strcpy(sensorValue.textLabel,"INTERNAL TEMP");
+    sensorValue.valueType = VALUE_TEMPERATURE;
+
+    displayValue(sensorValue,0,2);
+
+    sensorValue.lastValue = usekwh;
+    sensorValue.valueType = VALUE_ENERGY;
+    strcpy(sensorValue.textLabel,"ENERGY");
+
+
+    displayValue(sensorValue,1,0);
 
 
     displayString("STATUS UPDATE",64,59,1, ALIGN_CENTRE);
@@ -334,6 +377,6 @@ void loop()
   {
     slow_update = millis();
 
-    isInside = !isInside;
+    animate10s = !animate10s;
   }
 }
