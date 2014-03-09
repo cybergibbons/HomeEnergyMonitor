@@ -4,7 +4,7 @@
 GLCD_ST7565 glcd;
 
 #include <RTClib.h>                 // Real time clock (RTC) - used for software RTC to reset kWh counters at midnight
-//#include <Wire.h>                   // Part of Arduino libraries - needed for RTClib
+#include <Wire.h>                   // Part of Arduino libraries - needed for RTClib
 RTC_Millis RTC;
 
 #include "font_metric01.h"
