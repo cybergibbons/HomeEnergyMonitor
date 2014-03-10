@@ -1,7 +1,6 @@
 #include <JeeLib.h>
 #include <GLCD_ST7565.h>
 #include <avr/pgmspace.h>
-//#include <string.h>
 GLCD_ST7565 glcd;
 
 #include <RTClib.h>                 // Real time clock (RTC) - used for software RTC to reset kWh counters at midnight
@@ -12,15 +11,26 @@ RTC_Millis RTC;
 #include "font_metric02.h"
 #include "font_metric04.h"
 
-#define DISPLAY_NODE  25         // Should be unique on network, node ID 30 reserved for base station
-#define INTERNAL_NODE 19
-#define EXTERNAL_NODE 22
-#define POWER_NODE    10
-#define BASE_NODE     15
+const int DISPLAY_NODE  = 25; // Our ID (in case we send)
+const int INTERNAL_NODE = 19; // The internal EmonTH node
+const int EXTERNAL_NODE = 22; // The external EmonTH node
+const int POWER_NODE    = 10; // The EmonTX node
+const int BASE_NODE     = 15; // The Raspberry Pi base station (for receiving time updates)
 
-#define RF_FREQ RF12_433MHZ     // frequency - match to same frequency as RFM12B module (change to 868Mhz or 915Mhz if appropriate)
-#define GROUP 210 
+const int RF_FREQ      = RF12_433MHZ;   // frequency - match to same frequency as RFM12B module (change to 868Mhz or 915Mhz if appropriate)
+const int GROUP         = 210; 
 
+const int greenLED      = 6;         // Green tri-color LED
+const int redLED        = 9;           // Red tri-color LED
+const int LDRpin        = 4;           // analog pin of onboard lightsensor 
+
+const int BUFFER_SIZE   =  16;     // Used for string buffer - max half screen width
+const int DISP_REFRESH_INTERVAL = 200;
+
+const float ILLEGAL_TEMP  = -127;
+const float ILLEGAL_POWER = -1; // This is not designed for import!
+
+// Alightment of text
 typedef enum 
 {
   ALIGN_LEFT,
@@ -29,7 +39,14 @@ typedef enum
   ALIGN_UNITS,
 } align_t;
 
-unsigned long fast_update, slow_update;
+// Type of value
+enum value_t {
+  VALUE_TEMPERATURE,
+  VALUE_POWER,
+  VALUE_ENERGY,
+  VALUE_VOLTAGE,    // Not implemented
+  VALUE_PERCENTAGE  // Not implemented
+};
 
 //---------------------------------------------------
 // Data structures for transfering data between units
@@ -61,38 +78,23 @@ PayloadBase base;
 unsigned long baseLastUpdate = 0;
 
 int hour = 12, minute = 0;
-double usekwh = 0;
 
-const int greenLED=6;               // Green tri-color LED
-const int redLED=9;                 // Red tri-color LED
-const int LDRpin=4;    		    // analog pin of onboard lightsensor 
-int cval_use;
+double dailyEnergy = 0;
+int currentPower;
 
 bool animate10s = true;
 
-enum value_t {
-  VALUE_TEMPERATURE,
-  VALUE_POWER,
-  VALUE_ENERGY,
-  VALUE_VOLTAGE,
-  VALUE_PERCENTAGE
-};
+unsigned long fastUpdate, slowUpdate;
 
-const int BUFFER_SIZE=16;
-const int DISP_REFRESH_INTERVAL = 200;
-const float ILLEGAL_TEMP = -127;
-const float ILLEGAL_POWER = -1; // This is not designed for import!
-
-//--------------------------------------------------------------------------------------------
-// Setup
-//--------------------------------------------------------------------------------------------
 void setup()
 {
   delay(500); 				   //wait for power to settle before firing up the RF
   rf12_initialize(DISPLAY_NODE, RF_FREQ,GROUP);
   delay(100);				   //wait for RF to settle befor turning on display
+
+
   glcd.begin(0x19);
-  glcd.backLight(200);
+  glcd.backLight(255);
 
   pinMode(greenLED, OUTPUT); 
   pinMode(redLED, OUTPUT); 
@@ -283,33 +285,33 @@ void loop()
     }
   }
   
-  if ((millis()-fast_update)>DISP_REFRESH_INTERVAL)
+  if ((millis()-fastUpdate)>DISP_REFRESH_INTERVAL)
   {
-    fast_update = millis();
+    fastUpdate = millis();
     
     DateTime now = RTC.now();
     int last_hour = hour;
     hour = now.hour();
     minute = now.minute();
 
-    usekwh += (emontx.power1 * 0.2) / 3600000;
+    dailyEnergy += (emontx.power1 * 0.2) / 3600000;
     
     if (last_hour == 23 && hour == 00)
     {
-      usekwh = 0;                //reset Kwh/d counter at midnight
+      dailyEnergy = 0;                //reset Kwh/d counter at midnight
       internalValid = false;
       externalValid = false;
     }
 
-    cval_use = cval_use + (emontx.power1 - cval_use)*0.50;        //smooth transitions
+    currentPower = currentPower + (emontx.power1 - currentPower)*0.50;        //smooth transitions
     
     glcd.clear();
     glcd.drawLine(63, 0, 63, 57, WHITE); // dividing line
 
     renderPanel(VALUE_TEMPERATURE, internalTemp, "INT TEMP", animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",0,0);
     renderPanel(VALUE_TEMPERATURE, externalTemp, "EXT TEMP", animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",1,0);
-    renderPanel(VALUE_POWER, cval_use, "POWER", animate10s?powerMax:powerMin,animate10s?"MAX":"MIN",0,1);
-    renderPanel(VALUE_ENERGY, usekwh, "DAILY ENERGY", 0.0, "TOT",1,1);
+    renderPanel(VALUE_POWER, currentPower, "POWER", animate10s?powerMax:powerMin,animate10s?"MAX":"MIN",0,1);
+    renderPanel(VALUE_ENERGY, dailyEnergy, "DAILY ENERGY", 0.0, "TOT",1,1);
 
 
     displayString("STATUS UPDATE",64,59,1, ALIGN_CENTRE);
@@ -321,9 +323,9 @@ void loop()
     glcd.backLight(LDRbacklight);  
   } 
   
-  if ((millis()-slow_update)>10000)
+  if ((millis()-slowUpdate)>10000)
   {
-    slow_update = millis();
+    slowUpdate = millis();
 
     animate10s = !animate10s;
   }
