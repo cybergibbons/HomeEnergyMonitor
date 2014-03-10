@@ -78,20 +78,10 @@ enum value_t {
   VALUE_PERCENTAGE
 };
 
-typedef struct 
-{
-  value_t valueType;
-  float   lastValue;
-  long  lastValueUpdate;
-  float minValue;
-  long  minValueUpdate;
-  float maxValue;
-  long  maxValueUpdate;
-  char textLabel[16];
-} SensorValue_t;
-
 const int BUFFER_SIZE=16;
 const int DISP_REFRESH_INTERVAL = 200;
+const float ILLEGAL_TEMP = -127;
+const float ILLEGAL_POWER = -1; // This is not designed for import!
 
 //--------------------------------------------------------------------------------------------
 // Setup
@@ -108,24 +98,29 @@ void setup()
   pinMode(redLED, OUTPUT); 
 }
 
-void displayString(char* str, byte xpos, byte ypos, byte font, align_t align)
+void displayString(const char* str, byte xpos, byte ypos, byte font, align_t align)
 {  
   byte width;
 
+  // The only supported font currently is a monospaced font
+  // Too much work to align with others
   switch (font)
   {
     case 1:
       glcd.setFont(font_metric01);
+      // 3 wide + 1 for space
       width = 4;
       break;
 
     case 2:
       glcd.setFont(font_metric02);
+      // 7 wide + 1 for space
       width = 8;
       break;
 
     case 3:
       glcd.setFont(font_metric04);
+      // 15 wide + 1 for space
       width = 16;
   }
 
@@ -152,7 +147,8 @@ void displayString(char* str, byte xpos, byte ypos, byte font, align_t align)
   glcd.drawString(xpos,ypos,str); 
 }
 
-void displayNumber(float value, char* units, byte decimalPlaces, byte xpos, byte ypos, byte font, align_t align)
+// Add units to the value and display string
+void displayNumber(float value, const char* units, byte decimalPlaces, byte xpos, byte ypos, byte font, align_t align)
 {
   char str[BUFFER_SIZE];
 
@@ -162,74 +158,53 @@ void displayNumber(float value, char* units, byte decimalPlaces, byte xpos, byte
   displayString(str,xpos,ypos,font,align); 
 }
 
-void displayValue(SensorValue_t sensorValue, byte column, byte row)
+// Render a pane with a large value, large label, small value and small label
+void renderPanel(value_t typeValue, float mainValue, const char* mainLabel, float smallValue, const char* smallLabel, byte column, byte row)
 {
-  // No bounds checking
-  byte xOffset = 64 * column;
+  // A two column, threw row layout
+  // No checking that col/row is in bounds
+  byte xOffset = 65 * column;
   byte yOffset = 20 * row;
 
-  displayString(sensorValue.textLabel,xOffset+63,yOffset,1,ALIGN_RIGHT);
+  // The main label at the top in small font
+  // 15 characters max
+  displayString(mainLabel,xOffset+62,yOffset,1,ALIGN_RIGHT);
 
-  switch (sensorValue.valueType)
-  {
+  switch (typeValue)
+  { 
     case VALUE_TEMPERATURE:
-        displayNumber(sensorValue.lastValue,"*",1,xOffset + 55,yOffset + 6,2,ALIGN_UNITS); 
-    break;
+      // * is deg symbol in the monospaced font used
+      displayNumber(mainValue,"*",1,xOffset+54,yOffset+6,2,ALIGN_UNITS);
+      
+      // Small label - 4 characters max but 3 looks less cramped
+      displayString(smallLabel,xOffset,yOffset+6,1,ALIGN_LEFT);
+      displayNumber(smallValue,"*",1,xOffset,yOffset+13,1,ALIGN_LEFT);
+      break;
 
     case VALUE_POWER:
-        if((sensorValue.lastValue > 1000) || (sensorValue.lastValue< -1000))
-        {
-          displayNumber(sensorValue.lastValue,"KW",1,xOffset + 47,yOffset + 6,2,ALIGN_UNITS);  
-        }
-        else
-        {
-          displayNumber(sensorValue.lastValue,"W",0,xOffset + 47,yOffset + 6,2,ALIGN_UNITS); 
-        }
-    break;
+      if((mainValue > 1000) || (mainValue< -1000))
+      {
+        // KW with 0dp
+        displayNumber(mainValue,"KW",1,xOffset + 47,yOffset + 6,2,ALIGN_UNITS);  
+      }
+      else
+      {
+        // W with 0dp
+        displayNumber(mainValue,"W",0,xOffset + 47,yOffset + 6,2,ALIGN_UNITS); 
+      }
+      break;
 
     case VALUE_ENERGY:
-        displayNumber(sensorValue.lastValue,"KWH",0,xOffset + 39,yOffset + 6,2,ALIGN_UNITS); 
-    break;
+      displayNumber(mainValue,"KWH",1,xOffset + 39,yOffset + 6,2,ALIGN_UNITS);
+      break;
 
-    case VALUE_VOLTAGE:
-        displayNumber(sensorValue.lastValue,"V",0,xOffset + 55,yOffset + 6,2,ALIGN_UNITS); 
-    break;
-
-    case VALUE_PERCENTAGE:
-    break;
+    default:
+      // We haven't implemented this type yet
+      displayString("ERR 2", xOffset+62,yOffset+6,2,ALIGN_RIGHT);
   }
 
-  switch (sensorValue.valueType)
-  {
-    case VALUE_TEMPERATURE:
-        if (animate10s)
-        {
-          displayString("MAX",xOffset,yOffset+6,1,ALIGN_LEFT);
-          displayNumber(sensorValue.maxValue,"*",1,xOffset,yOffset+13,1,ALIGN_LEFT);          
-        }
-        else
-        {
-          displayString("MIN",xOffset,yOffset+6,1,ALIGN_LEFT);
-          displayNumber(sensorValue.minValue,"*",1,xOffset,yOffset+13,1,ALIGN_LEFT); 
-        }
-    break;
-
-    case VALUE_POWER:
-    break;
-
-    case VALUE_ENERGY:
-    break;
-
-    case VALUE_VOLTAGE:
-    break;
-
-    case VALUE_PERCENTAGE:
-    break;
-  }
 
 }
-
-
 
 void loop()
 {
@@ -329,39 +304,12 @@ void loop()
     cval_use = cval_use + (emontx.power1 - cval_use)*0.50;        //smooth transitions
     
     glcd.clear();
-    glcd.drawLine(64, 0, 64, 57, WHITE); // dividing line
+    glcd.drawLine(63, 0, 63, 57, WHITE); // dividing line
 
-    SensorValue_t sensorValue;
-
-    sensorValue.lastValue = cval_use;
-    sensorValue.valueType = VALUE_POWER;
-    strcpy(sensorValue.textLabel,"POWER");
-
-
-    displayValue(sensorValue,0,0);
-
-    sensorValue.lastValue = externalTemp;
-    sensorValue.minValue = externalTempMin;
-    sensorValue.maxValue = externalTempMax;
-    strcpy(sensorValue.textLabel,"EXTERNAL TEMP");
-    sensorValue.valueType = VALUE_TEMPERATURE;
-
-    displayValue(sensorValue,0,1);
-
-    sensorValue.lastValue = internalTemp;
-    sensorValue.minValue = internalTempMin;
-    sensorValue.maxValue = internalTempMax;
-    strcpy(sensorValue.textLabel,"INTERNAL TEMP");
-    sensorValue.valueType = VALUE_TEMPERATURE;
-
-    displayValue(sensorValue,0,2);
-
-    sensorValue.lastValue = usekwh;
-    sensorValue.valueType = VALUE_ENERGY;
-    strcpy(sensorValue.textLabel,"ENERGY");
-
-
-    displayValue(sensorValue,1,0);
+    renderPanel(VALUE_TEMPERATURE, internalTemp, "INT TEMP", animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",0,0);
+    renderPanel(VALUE_TEMPERATURE, externalTemp, "EXT TEMP", animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",1,0);
+    renderPanel(VALUE_POWER, cval_use, "POWER", animate10s?powerMax:powerMin,animate10s?"MAX":"MIN",0,1);
+    renderPanel(VALUE_ENERGY, usekwh, "DAILY ENERGY", 0.0, "TOT",1,1);
 
 
     displayString("STATUS UPDATE",64,59,1, ALIGN_CENTRE);
