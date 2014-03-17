@@ -13,11 +13,12 @@ RTC_Millis RTC;
 #include "font_metric02.h"
 #include "font_metric04.h"
 
-const int DISPLAY_NODE  = 25; // Our ID (in case we send)
-const int INTERNAL_NODE = 19; // The internal EmonTH node
-const int EXTERNAL_NODE = 22; // The external EmonTH node
-const int POWER_NODE    = 10; // The EmonTX node
-const int BASE_NODE     = 15; // The Raspberry Pi base station (for receiving time updates)
+const int DISPLAY_ID  = 25; // Our ID (in case we send)
+const int INTERNAL_ID = 19; // The internal EmonTH node
+const int EXTERNAL_ID = 22; // The external EmonTH node
+const int POWER_ID    = 10; // The EmonTX node
+const int BASE_ID     = 15; // The Raspberry Pi base station (for receiving time updates)
+const int ENERGY_ID   = -1; // This is a fake node for integrating power to energy
 
 const int RF_FREQ      = RF12_433MHZ;   // frequency - match to same frequency as RFM12B module (change to 868Mhz or 915Mhz if appropriate)
 const int GROUP         = 210; 
@@ -31,6 +32,9 @@ const int DISP_REFRESH_INTERVAL = 200;
 
 const float ILLEGAL_TEMP  = -127;
 const float ILLEGAL_POWER = -1; // This is not designed for import!
+
+const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
+const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
 
 
 // Alightment of text
@@ -52,16 +56,18 @@ typedef enum {
 } value_t;
 
 enum {
-  DEVICE_INT_EMONTH = 0,
-  DEVICE_EXT_EMONTH = 1,
-  DEVICE_EMONTX     = 2,
-  DEVICES_NUMBER    = DEVICE_EMONTX + 1
+  SENSOR_EMONTH,
+  SENSOR_EMONTX,
+  SENSOR_ENERGY
 };
 
-
-
-float lastValue[DEVICES_NUMBER];
-
+// Node ID, type of sensor, index of value, type of value, x, y
+FLASH_TABLE(byte, LAYOUT_TABLE,6,
+  {INTERNAL_ID, SENSOR_EMONTH, 0, VALUE_TEMPERATURE, 0, 0},
+  {EXTERNAL_ID, SENSOR_EMONTH, 1, VALUE_TEMPERATURE, 1, 0},
+  {POWER_ID, SENSOR_EMONTX, 0, VALUE_POWER, 0,1},
+  {ENERGY_ID, SENSOR_ENERGY, 0, VALUE_ENERGY, 1, 1}
+);
 
 typedef struct { int power1, power2, power3, Vrms; } PayloadTX;         // neat way of packaging data for RF comms
 PayloadTX emontx;
@@ -101,7 +107,7 @@ unsigned long fastUpdate, slowUpdate;
 void setup()
 {
   delay(500); 				   //wait for power to settle before firing up the RF
-  rf12_initialize(DISPLAY_NODE, RF_FREQ,GROUP);
+  rf12_initialize(DISPLAY_ID, RF_FREQ,GROUP);
   delay(100);				   //wait for RF to settle befor turning on display
 
   glcd.begin(0x19);
@@ -231,7 +237,7 @@ void loop()
     {
       int node_id = (rf12_hdr & 0x1F);
 
-      if (node_id == POWER_NODE) {
+      if (node_id == POWER_ID) {
           emontx = *(PayloadTX*) rf12_data;
           if (!powerValid)
           {
@@ -249,19 +255,18 @@ void loop()
           powerLastUpdate = millis();
       }  
       
-      if (node_id == BASE_NODE)
+      if (node_id == BASE_ID)
       {
         base = *(PayloadBase*) rf12_data;
         RTC.adjust(DateTime(2014, 1, 1, base.hour, base.minute, 0));
         baseLastUpdate = millis();
       } 
       
-      if (node_id == EXTERNAL_NODE) 
+      if (node_id == EXTERNAL_ID) 
       {
         externalth = *(PayloadTH*) rf12_data;
         externalTemp = (double)externalth.temp2 / 10.0;
-        lastValue[DEVICE_EXT_EMONTH] = (double)externalth.temp2 / 10.0;
-
+        
         if (!externalValid)
         {
           externalTempMin = externalTemp;
@@ -278,7 +283,7 @@ void loop()
         externalLastUpdate = millis();
       }
       
-      if (node_id == INTERNAL_NODE) 
+      if (node_id == INTERNAL_ID) 
       {
         internalth = *(PayloadTH*) rf12_data;
         internalTemp = (double)internalth.temp1 / 10.0;
