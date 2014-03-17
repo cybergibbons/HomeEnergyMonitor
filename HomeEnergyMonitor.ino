@@ -7,6 +7,8 @@ GLCD_ST7565 glcd;
 #include <Wire.h>                   // Part of Arduino libraries - needed for RTClib
 RTC_Millis RTC;
 
+#include <Flash.h>
+
 #include "font_metric01.h"
 #include "font_metric02.h"
 #include "font_metric04.h"
@@ -30,6 +32,7 @@ const int DISP_REFRESH_INTERVAL = 200;
 const float ILLEGAL_TEMP  = -127;
 const float ILLEGAL_POWER = -1; // This is not designed for import!
 
+
 // Alightment of text
 typedef enum 
 {
@@ -40,17 +43,26 @@ typedef enum
 } align_t;
 
 // Type of value
-enum value_t {
+typedef enum {
   VALUE_TEMPERATURE,
   VALUE_POWER,
   VALUE_ENERGY,
   VALUE_VOLTAGE,    // Not implemented
   VALUE_PERCENTAGE  // Not implemented
+} value_t;
+
+enum {
+  DEVICE_INT_EMONTH = 0,
+  DEVICE_EXT_EMONTH = 1,
+  DEVICE_EMONTX     = 2,
+  DEVICES_NUMBER    = DEVICE_EMONTX + 1
 };
 
-//---------------------------------------------------
-// Data structures for transfering data between units
-//---------------------------------------------------
+
+
+float lastValue[DEVICES_NUMBER];
+
+
 typedef struct { int power1, power2, power3, Vrms; } PayloadTX;         // neat way of packaging data for RF comms
 PayloadTX emontx;
 float powerMax;
@@ -91,7 +103,6 @@ void setup()
   delay(500); 				   //wait for power to settle before firing up the RF
   rf12_initialize(DISPLAY_NODE, RF_FREQ,GROUP);
   delay(100);				   //wait for RF to settle befor turning on display
-
 
   glcd.begin(0x19);
   glcd.backLight(255);
@@ -170,7 +181,7 @@ void renderPanel(value_t typeValue, float mainValue, const char* mainLabel, floa
 
   // The main label at the top in small font
   // 15 characters max
-  displayString(mainLabel,xOffset+62,yOffset,1,ALIGN_RIGHT);
+  displayString(mainLabel,xOffset+55,yOffset,1,ALIGN_RIGHT);
 
   switch (typeValue)
   { 
@@ -197,15 +208,19 @@ void renderPanel(value_t typeValue, float mainValue, const char* mainLabel, floa
       break;
 
     case VALUE_ENERGY:
-      displayNumber(mainValue,"KWH",1,xOffset + 39,yOffset + 6,2,ALIGN_UNITS);
+      displayNumber(mainValue,"KWH",1,xOffset + 38,yOffset + 6,2,ALIGN_UNITS);
       break;
 
     default:
       // We haven't implemented this type yet
       displayString("ERR 2", xOffset+62,yOffset+6,2,ALIGN_RIGHT);
   }
+}
 
-
+void fromFlash(PGM_P string, char * buffer, byte len)
+{
+    strncpy_P(buffer, string, len);
+    buffer[len - 1] = '\0';
 }
 
 void loop()
@@ -245,6 +260,7 @@ void loop()
       {
         externalth = *(PayloadTH*) rf12_data;
         externalTemp = (double)externalth.temp2 / 10.0;
+        lastValue[DEVICE_EXT_EMONTH] = (double)externalth.temp2 / 10.0;
 
         if (!externalValid)
         {
@@ -308,13 +324,21 @@ void loop()
     glcd.clear();
     glcd.drawLine(63, 0, 63, 57, WHITE); // dividing line
 
-    renderPanel(VALUE_TEMPERATURE, internalTemp, "INT TEMP", animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",0,0);
-    renderPanel(VALUE_TEMPERATURE, externalTemp, "EXT TEMP", animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",1,0);
+    char str[BUFFER_SIZE];
+
+
+    fromFlash(LABEL_INTERNAL, str, BUFFER_SIZE);
+    renderPanel(VALUE_TEMPERATURE, internalTemp, str, animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",0,0);
+    renderPanel(VALUE_TEMPERATURE, externalTemp, "EXT TEMP", animate10s?externalTempMax:externalTempMin,animate10s?"MAX":"MIN",1,0);
     renderPanel(VALUE_POWER, currentPower, "POWER", animate10s?powerMax:powerMin,animate10s?"MAX":"MIN",0,1);
     renderPanel(VALUE_ENERGY, dailyEnergy, "DAILY ENERGY", 0.0, "TOT",1,1);
 
 
-    displayString("STATUS UPDATE",64,59,1, ALIGN_CENTRE);
+    
+
+    fromFlash(LABEL_STATUS, str, BUFFER_SIZE);
+
+    displayString(str,64,59,1, ALIGN_CENTRE);
     glcd.refresh();
 
     int LDR = analogRead(LDRpin);                     // Read the LDR Value so we can work out the light level in the room.
