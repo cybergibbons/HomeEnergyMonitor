@@ -34,6 +34,13 @@ const float ILLEGAL_TEMP  = -127;
 const float ILLEGAL_POWER = -1; // This is not designed for import!
 
 const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
+const prog_char LABEL_EXTERNAL[] PROGMEM = "EXT TEMP";
+const prog_char LABEL_POWER[] PROGMEM = "POWER";
+const prog_char LABEL_ENERGY[] PROGMEM = "ENERGY";
+
+const prog_char LABEL_MIN[] PROGMEM = "MIN";
+const prog_char LABEL_MAX[] PROGMEM = "MAX";
+
 const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
 
 
