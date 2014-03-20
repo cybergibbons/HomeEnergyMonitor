@@ -28,21 +28,18 @@ const int redLED        = 9;           // Red tri-color LED
 const int LDRpin        = 4;           // analog pin of onboard lightsensor 
 
 const int BUFFER_SIZE   =  16;     // Used for string buffer - max half screen width
+const int BUFFER2_SIZE  = 4;      // Small buffer for the min/max
 const int DISP_REFRESH_INTERVAL = 200;
 
 const float ILLEGAL_TEMP  = -127;
 const float ILLEGAL_POWER = -1; // This is not designed for import!
 
-const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
-const prog_char LABEL_EXTERNAL[] PROGMEM = "EXT TEMP";
-const prog_char LABEL_POWER[] PROGMEM = "POWER";
-const prog_char LABEL_ENERGY[] PROGMEM = "ENERGY";
+
 
 const prog_char LABEL_MIN[] PROGMEM = "MIN";
 const prog_char LABEL_MAX[] PROGMEM = "MAX";
 
 const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
-
 
 // Alightment of text
 typedef enum 
@@ -55,52 +52,59 @@ typedef enum
 
 // Type of value
 typedef enum {
-  VALUE_TEMPERATURE,
-  VALUE_POWER,
-  VALUE_ENERGY,
-  VALUE_VOLTAGE,    // Not implemented
-  VALUE_PERCENTAGE  // Not implemented
-} value_t;
+  UNIT_TEMPERATURE,
+  UNIT_POWER,
+  UNIT_ENERGY,
+  UNIT_VOLTAGE,    // Not implemented
+  UNIT_PERCENTAGE,  // Not implemented
+  UNIT_TIME
+} unit_t;
 
-enum {
-  SENSOR_EMONTH,
-  SENSOR_EMONTX,
-  SENSOR_ENERGY
+typedef enum {
+  POWER,
+  ENERGY,
+  DUMMY1,
+  DUMMY2,
+  INTERNAL_TEMP,
+  EXTERNAL_TEMP
+} position;
+
+const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
+const prog_char LABEL_EXTERNAL[] PROGMEM = "EXT TEMP";
+const prog_char LABEL_NOTIMPLEMENTED[] = "NOT IMP";
+const prog_char LABEL_POWER[] PROGMEM = "POWER";
+const prog_char LABEL_ENERGY[] PROGMEM = "ENERGY";
+
+const prog_char* UNIT_STRING_TABLE[] PROGMEM =
+{
+  LABEL_POWER,
+  LABEL_ENERGY,
+  LABEL_NOTIMPLEMENTED,
+  LABEL_NOTIMPLEMENTED,
+  LABEL_INTERNAL,
+  LABEL_EXTERNAL
 };
 
-// Node ID, type of sensor, index of value, type of value, x, y
-FLASH_TABLE(byte, LAYOUT_TABLE,6,
-  {INTERNAL_ID, SENSOR_EMONTH, 0, VALUE_TEMPERATURE, 0, 0},
-  {EXTERNAL_ID, SENSOR_EMONTH, 1, VALUE_TEMPERATURE, 1, 0},
-  {POWER_ID, SENSOR_EMONTX, 0, VALUE_POWER, 0,1},
-  {ENERGY_ID, SENSOR_ENERGY, 0, VALUE_ENERGY, 1, 1}
-);
+
+typedef struct {
+  bool valid;
+  unit_t unitType;
+  float currentValue,
+  minValue,
+  maxValue;
+} value_t;
+
+value_t values[6];
 
 typedef struct { int power1, power2, power3, Vrms; } PayloadTX;         // neat way of packaging data for RF comms
 PayloadTX emontx;
-float powerMax;
-float powerMin;
-bool powerValid = false;
-unsigned long powerLastUpdate = 0;
+
 
 typedef struct { int temp1, temp2, humidity, voltage; } PayloadTH;
-PayloadTH internalth;
-float internalTemp;
-float internalTempMax;
-float internalTempMin;
-bool internalValid = false;
-unsigned long internalLastUpdate = 0;
-
-PayloadTH externalth;
-float externalTemp;
-float externalTempMax;
-float externalTempMin;
-bool externalValid = false;
-unsigned long externalLastUpdate = 0;
+PayloadTH emonth;
 
 typedef struct {char node, hour, minute; } PayloadBase;
 PayloadBase base;
-unsigned long baseLastUpdate = 0;
 
 int hour = 12, minute = 0;
 
@@ -122,6 +126,10 @@ void setup()
 
   pinMode(greenLED, OUTPUT); 
   pinMode(redLED, OUTPUT); 
+
+  // Make sure the values are not valid
+  for (int i=0; i<6; i++)
+    values[i].valid = 0;
 }
 
 void displayString(const char* str, byte xpos, byte ypos, byte font, align_t align)
@@ -185,7 +193,7 @@ void displayNumber(float value, const char* units, byte decimalPlaces, byte xpos
 }
 
 // Render a pane with a large value, large label, small value and small label
-void renderPanel(value_t typeValue, float mainValue, const char* mainLabel, float smallValue, const char* smallLabel, byte column, byte row)
+void renderPanel(unit_t typeValue, float mainValue, const char* mainLabel, float smallValue, const char* smallLabel, byte column, byte row)
 {
   // A two column, threw row layout
   // No checking that col/row is in bounds
@@ -198,7 +206,7 @@ void renderPanel(value_t typeValue, float mainValue, const char* mainLabel, floa
 
   switch (typeValue)
   { 
-    case VALUE_TEMPERATURE:
+    case UNIT_TEMPERATURE:
       // * is deg symbol in the monospaced font used
       displayNumber(mainValue,"*",1,xOffset+54,yOffset+6,2,ALIGN_UNITS);
       
@@ -207,7 +215,7 @@ void renderPanel(value_t typeValue, float mainValue, const char* mainLabel, floa
       displayNumber(smallValue,"*",1,xOffset,yOffset+13,1,ALIGN_LEFT);
       break;
 
-    case VALUE_POWER:
+    case UNIT_POWER:
       if((mainValue > 1000) || (mainValue< -1000))
       {
         // KW with 0dp
@@ -220,7 +228,7 @@ void renderPanel(value_t typeValue, float mainValue, const char* mainLabel, floa
       }
       break;
 
-    case VALUE_ENERGY:
+    case UNIT_ENERGY:
       displayNumber(mainValue,"KWH",1,xOffset + 38,yOffset + 6,2,ALIGN_UNITS);
       break;
 
@@ -246,69 +254,73 @@ void loop()
 
       if (node_id == POWER_ID) {
           emontx = *(PayloadTX*) rf12_data;
-          if (!powerValid)
+          float value = emontx.power1;
+
+          values[POWER].unitType = UNIT_POWER;
+          values[POWER].currentValue = value;
+
+          if (!values[POWER].valid)
           {
-            powerMin = emontx.power1;
-            powerMax = emontx.power1;
-            powerValid = true;
+            values[POWER].minValue = value;
+            values[POWER].maxValue = value;
+            values[POWER].valid = true;
           }
 
-          if (emontx.power1 < powerMin)
-            powerMin = emontx.power1;
+          if (value < values[POWER].minValue)
+            values[POWER].minValue = value;
 
-          if (emontx.power1 > powerMax)
-            powerMax = emontx.power1;
-
-          powerLastUpdate = millis();
+          if (value > values[POWER].maxValue)
+            values[POWER].maxValue = value;
       }  
       
       if (node_id == BASE_ID)
       {
         base = *(PayloadBase*) rf12_data;
         RTC.adjust(DateTime(2014, 1, 1, base.hour, base.minute, 0));
-        baseLastUpdate = millis();
       } 
       
       if (node_id == EXTERNAL_ID) 
       {
-        externalth = *(PayloadTH*) rf12_data;
-        externalTemp = (double)externalth.temp2 / 10.0;
+        emonth = *(PayloadTH*) rf12_data;
+        float value = (double)emonth.temp2 / 10.0;
+
+          values[EXTERNAL_TEMP].unitType = UNIT_TEMPERATURE;
+          values[EXTERNAL_TEMP].currentValue = value;
         
-        if (!externalValid)
-        {
-          externalTempMin = externalTemp;
-          externalTempMax = externalTemp;
-          externalValid = true;
-        }
+        if (!values[EXTERNAL_TEMP].valid)
+          {
+            values[EXTERNAL_TEMP].minValue = value;
+            values[EXTERNAL_TEMP].maxValue = value;
+            values[EXTERNAL_TEMP].valid = true;
+          }
 
-        if (externalTemp < externalTempMin)
-          externalTempMin = externalTemp;
+          if (value < values[EXTERNAL_TEMP].minValue)
+            values[EXTERNAL_TEMP].minValue = value;
 
-        if (externalTemp > externalTempMax)
-          externalTempMax = externalTemp;
-
-        externalLastUpdate = millis();
+          if (value > values[EXTERNAL_TEMP].maxValue)
+            values[EXTERNAL_TEMP].maxValue = value;
       }
       
       if (node_id == INTERNAL_ID) 
       {
-        internalth = *(PayloadTH*) rf12_data;
-        internalTemp = (double)internalth.temp1 / 10.0;
+        emonth = *(PayloadTH*) rf12_data;
+        float value = (double)emonth.temp1 / 10.0;
 
-        if (!internalValid)
-        {
-          internalTempMin = internalTemp;
-          internalTempMax = internalTemp;
-          internalValid = true;
-        }
+        values[INTERNAL_TEMP].unitType = UNIT_TEMPERATURE;
+        values[INTERNAL_TEMP].currentValue = value;
 
-        if (internalTemp < internalTempMin)
-          internalTempMin = internalTemp;
+        if (!values[INTERNAL_TEMP].valid)
+          {
+            values[INTERNAL_TEMP].minValue = value;
+            values[INTERNAL_TEMP].maxValue = value;
+            values[INTERNAL_TEMP].valid = true;
+          }
 
-        if (internalTemp > externalTempMax)
-          internalTempMax = internalTemp;
+          if (value < values[INTERNAL_TEMP].minValue)
+            values[INTERNAL_TEMP].minValue = value;
 
-        internalLastUpdate = millis();
+          if (value > values[INTERNAL_TEMP].maxValue)
+            values[INTERNAL_TEMP].maxValue = value;
       }
     }
   }
@@ -327,8 +339,8 @@ void loop()
     if (last_hour == 23 && hour == 00)
     {
       dailyEnergy = 0;                //reset Kwh/d counter at midnight
-      internalValid = false;
-      externalValid = false;
+      values[INTERNAL_TEMP].valid = false;
+      values[EXTERNAL_TEMP].valid = false;
     }
 
     currentPower = currentPower + (emontx.power1 - currentPower)*0.50;        //smooth transitions
@@ -337,16 +349,31 @@ void loop()
     glcd.drawLine(63, 0, 63, 57, WHITE); // dividing line
 
     char str[BUFFER_SIZE];
+    char str2[BUFFER2_SIZE];
+
+    for (int i=0; i<6 ; i++)
+    {
+      if (values[i].valid)
+      {
+        float smallValue;
+
+        if (animate10s)
+        {
+          smallValue = values[i].maxValue;
+          fromFlash(LABEL_MAX,str2,BUFFER2_SIZE);
+        }
+        else
+        {
+          smallValue = values[i].minValue;
+          fromFlash(LABEL_MIN,str2,BUFFER2_SIZE);
+        }
+
+        fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[i])),str,BUFFER_SIZE);
 
 
-    fromFlash(LABEL_INTERNAL, str, BUFFER_SIZE);
-    renderPanel(VALUE_TEMPERATURE, internalTemp, str, animate10s?internalTempMax:internalTempMin,animate10s?"MAX":"MIN",0,0);
-    renderPanel(VALUE_TEMPERATURE, externalTemp, "EXT TEMP", animate10s?externalTempMax:externalTempMin,animate10s?"MAX":"MIN",1,0);
-    renderPanel(VALUE_POWER, currentPower, "POWER", animate10s?powerMax:powerMin,animate10s?"MAX":"MIN",0,1);
-    renderPanel(VALUE_ENERGY, dailyEnergy, "DAILY ENERGY", 0.0, "TOT",1,1);
-
-
-    
+        renderPanel(values[i].unitType, values[i].currentValue, str, smallValue, str2, i/3, i%3);
+      }
+    }
 
     fromFlash(LABEL_STATUS, str, BUFFER_SIZE);
 
