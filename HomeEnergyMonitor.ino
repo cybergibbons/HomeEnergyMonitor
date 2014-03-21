@@ -38,6 +38,7 @@ Strings stored in flash
 const prog_char LABEL_MIN[] PROGMEM = "MIN";
 const prog_char LABEL_MAX[] PROGMEM = "MAX";
 const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
+const prog_char LABEL_TIMEOUT[] PROGMEM = "TIMED OUT";
 
 const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
 const prog_char LABEL_EXTERNAL[] PROGMEM = "EXT TEMP";
@@ -475,11 +476,14 @@ void loop()
     char str[BUFFER_SIZE];
     char str2[BUFFER2_SIZE];
 
+    // Render panels
     for (int i = 0; i < MAPPING_TABLE.rows(); i++)    
     {
+      // This is just to make everything more readable below
       byte position = MAPPING_TABLE[i][I_NODE_POSITION];
       byte labelIndex = MAPPING_TABLE[i][I_NODE_LABEL];
       unit_t units = (unit_t)MAPPING_TABLE[i][I_NODE_UNITS]; 
+      byte timeout = MAPPING_TABLE[i][I_NODE_TIMEOUT];
 
       if (values[position].valid)
       {
@@ -496,12 +500,22 @@ void loop()
           fromFlash(LABEL_MIN,str2,BUFFER2_SIZE);
         }
 
-        fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[labelIndex])),str,BUFFER_SIZE);
+        // Has the time since we last received an update exceeded the timeout?
+        // If so, flash the timeout alternately with the normal label
+        if ((((millis() - values[position].lastUpdate) / 1000) > timeout) && animate10s)
+        {
+            fromFlash(LABEL_TIMEOUT, str, BUFFER_SIZE);
+        }
+        else
+        {
+          fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[labelIndex])),str,BUFFER_SIZE);
+        }
 
         renderPanel(units, values[position].currentValue, str, smallValue, str2, position/3, position%3);
       }
     }
 
+    // Not sure what to do here!
     fromFlash(LABEL_STATUS, str, BUFFER_SIZE);
     displayString(str,64,59,FONT_SMALL, ALIGN_CENTRE);
 
