@@ -35,47 +35,6 @@ const int POWER_TO_ENERGY_FACTOR = DISP_REFRESH_INTERVAL / 1000 / 3600000;
 const float ILLEGAL_TEMP  = -127;
 const float ILLEGAL_POWER = -1; // This is not designed for import!
 
-
-
-
-
-// Alightment of text
-typedef enum 
-{
-  ALIGN_LEFT,
-  ALIGN_RIGHT,
-  ALIGN_CENTRE,
-  ALIGN_UNITS,
-} align_t;
-
-typedef enum
-{
-  FONT_SMALL,
-  FONT_MEDIUM,
-  FONT_LARGE
-} font_t;
-
-// Type of value
-typedef enum {
-  UNIT_TEMPERATURE,
-  UNIT_POWER,
-  UNIT_ENERGY,
-  UNIT_VOLTAGE,    // Not implemented
-  UNIT_PERCENTAGE,  // Not implemented
-  UNIT_TIME
-} unit_t;
-
-typedef enum {
-  EMONTX_NODE,
-  EMONTH_NODE,
-  BASE_NODE
-} node_t;
-
-
-const byte POWER_DISPLAY = 0;
-const byte INT_TEMP_DISPLAY = 1;
-const byte EXT_TEMP_DISPLAY = 2;
-
 const prog_char LABEL_MIN[] PROGMEM = "MIN";
 const prog_char LABEL_MAX[] PROGMEM = "MAX";
 const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
@@ -95,19 +54,85 @@ const prog_char* VALUE_STRING_TABLE[] PROGMEM =
   LABEL_VOLTAGE
 };
 
-// RF12 Node ID, Type of Node, Index of Value, Position in Display, Units
-// Use these for index into array 
-const byte I_NODE_ID = 0;
-const byte I_NODE_TYPE = 1;
-const byte I_NODE_VALUE = 2;
-const byte I_NODE_POSITION = 3;
-const byte I_NODE_UNITS = 4;
+// Alightment of text
+typedef enum 
+{
+  ALIGN_LEFT, // Left of beginneing of string
+  ALIGN_RIGHT, // Right of end of string
+  ALIGN_CENTRE, // Middle of string
+  ALIGN_UNITS, // Left hand side of start of alpha chars after numeric
+} align_t;
 
+// Which font to use?
+// Note this is very reliant on using the font_metric01/02/03.h fonts
+typedef enum
+{
+  FONT_SMALL,
+  FONT_MEDIUM,
+  FONT_LARGE
+} font_t;
+
+// Type of value
+typedef enum {
+  UNIT_TEMPERATURE,
+  UNIT_POWER,
+  UNIT_ENERGY,
+  UNIT_VOLTAGE,    // Not implemented
+  UNIT_PERCENTAGE,  // Not implemented
+  UNIT_TIME
+} unit_t;
+
+// The type of node
+typedef enum {
+  NODE_EMONTX, // Standard EMONTX
+  NODE_EMONTH, // Standard EMONTH
+  NODE_RFM12PI // Standard RFM12PI sending the time
+};
+
+// For I_NODE_VALUE on NODE_EMONTX
+enum {
+  VALUE_EMONTX_POWER1,
+  VALUE_EMONTX_POWER2,
+  VALUE_EMONTX_POWER3,
+  VALUE_EMONTX_VRMS,
+  VALUE_EMONTX_TEMP
+};
+
+// For I_NODE_VALUE on NODE_EMONTH
+enum {
+  VALUE_EMONTH_TEMP1,
+  VALUE_EMONTH_TEMP2,
+  VALUE_EMONTH_HUMIDITY,
+  VALUE_EMONTH_BATTERY
+};
+
+// Which position on the screen should the data be
+// X is 0-2, Y is 0-1.
+enum {
+  X0_Y0,
+  X1_Y0,
+  X2_Y0,
+  X0_Y1,
+  X1_Y1,
+  X2_Y1
+};
+
+// Used to index the MAPPING_TABLE
+enum {
+  I_NODE_ID = 0,
+  I_NODE_TYPE = 1,
+  I_NODE_VALUE = 2,
+  I_NODE_POSITION = 3,
+  I_NODE_UNITS = 4
+};
+
+// This holds all the details about the values we wish to display
 FLASH_TABLE(byte, MAPPING_TABLE, 5,
-  {POWER_ID, EMONTX_NODE, 0, POWER_DISPLAY, UNIT_POWER},
-  {INTERNAL_ID, EMONTH_NODE, 0, INT_TEMP_DISPLAY, UNIT_TEMPERATURE},
-  {EXTERNAL_ID, EMONTH_NODE, 1, EXT_TEMP_DISPLAY, UNIT_TEMPERATURE},
-  {POWER_ID, EMONTX_NODE, 4, 3, UNIT_VOLTAGE}
+// I_NODE_ID    I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS
+  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER},
+  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE},
+  {EXTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE},
+  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X0_Y1,            UNIT_VOLTAGE}
   );
 
 typedef struct {
@@ -282,7 +307,7 @@ void rf12_process()
         // Switch on the type of node
         switch (MAPPING_TABLE[i][I_NODE_TYPE])
         {
-          case EMONTH_NODE:
+          case NODE_EMONTH:
           {
             PayloadTH payload = *(PayloadTH*) rf12_data;
 
@@ -292,9 +317,9 @@ void rf12_process()
             else
               value = (float)payload.temp2 / 10.0;
           }
-          break; // End EMONTH_NODE case
+          break; // End NODE_EMONTH case
 
-          case EMONTX_NODE:
+          case NODE_EMONTX:
           {
             PayloadTX payload = *(PayloadTX*) rf12_data;
 
@@ -324,15 +349,15 @@ void rf12_process()
                 value = payload.temp;
                 break;
             } // End payload selection
-            break; //End EMONTX_NODE
+            break; //End NODE_EMONTX
           }
 
-            case BASE_NODE:
+            case NODE_RFM12PI:
             {
               PayloadBase payload = *(PayloadBase*) rf12_data;
               RTC.adjust(DateTime(2014, 1, 1, payload.hour, payload.minute, 0));
               break;
-            } // End BASE_NODE
+            } // End NODE_RFM12PI
 
         } // End node type switch
 
@@ -385,13 +410,18 @@ void loop()
     hour = now.hour();
     minute = now.minute();
 
-    dailyEnergy += values[POWER_DISPLAY].currentValue * POWER_TO_ENERGY_FACTOR;
+    dailyEnergy += values[X0_Y0].currentValue * POWER_TO_ENERGY_FACTOR;
     
     if (last_hour == 23 && hour == 00)
     {
       dailyEnergy = 0;                //reset Kwh/d counter at midnight
-      values[INT_TEMP_DISPLAY].valid = false;
-      values[EXT_TEMP_DISPLAY].valid = false;
+
+      // Reset MIN/MAX for all values
+      for (int i= 0; i < MAPPING_TABLE.rows(); i++)
+      {
+        byte position = MAPPING_TABLE[i][I_NODE_POSITION];
+        values[position].valid = false;
+      }
     }
 
     //currentPower = currentPower + (emontx.power1 - currentPower)*0.50;        //smooth transitions
