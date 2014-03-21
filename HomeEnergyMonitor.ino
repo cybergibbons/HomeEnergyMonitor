@@ -31,7 +31,7 @@ const byte LDRpin           = 4;           // analog pin of onboard lightsensor
 const byte BUFFER_SIZE      =  16;     // Used for string buffer - max half screen width
 const byte BUFFER2_SIZE     = 4;      // Small buffer for the min/max
 const byte DISP_REFRESH_INTERVAL = 200;
-const float POWER_TO_ENERGY_FACTOR = DISP_REFRESH_INTERVAL / 1000 / 60 * 60 * 1000;
+const float POWER_TO_ENERGY_FACTOR = ((float)DISP_REFRESH_INTERVAL / 1000.0) / 3600000;
 
 /* ====================================
 Strings stored in flash
@@ -186,7 +186,10 @@ int hour = 12, minute = 0;
 double dailyEnergy = 0;
 int currentPower;
 
-bool animate10s = true;
+byte animateCounter = 0;
+bool animate2s = false;
+bool animate4s = false;
+bool animate10s = false;
 
 unsigned long fastUpdate, slowUpdate;
 
@@ -222,10 +225,14 @@ void displayString(const char* str, byte xpos, byte ypos, font_t font, align_t a
   {
     case ALIGN_RIGHT:
       xpos = xpos - strlen(str) * width;
-    break;
+      break;
 
     case ALIGN_UNITS:
-      while(str[pos] && (str[pos] <= 0x39 && str[pos] != 0x2A)) pos++;
+      // 0x30 = 0
+      // 0x29 = 9
+      // 0x2E = .
+      // Align on last character that is not one of these
+      while(str[pos] && ((str[pos] >= 0x30 && str[pos] <= 0x39) || str[pos] == 0x2E)) pos++;
       xpos = xpos - pos * width;
       break;
 
@@ -233,7 +240,7 @@ void displayString(const char* str, byte xpos, byte ypos, font_t font, align_t a
       xpos = xpos - strlen(str) * (width/2);
 
     case ALIGN_LEFT:
-    break;
+      break;
   }   
 
   glcd.drawString(xpos,ypos,str); 
@@ -287,15 +294,18 @@ void renderPanel(unit_t typeValue, float mainValue, const char* mainLabel, float
       break;
 
     case UNIT_ENERGY:
-      displayNumber(mainValue,"KWH",1,xOffset + 38,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS);
+      if (mainValue < 10) 
+        displayNumber(mainValue,"KWH",2,xOffset + 38,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS);
+      else
+        displayNumber(mainValue,"KWH",1,xOffset + 38,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS);
       break;
 
     case UNIT_VOLTAGE:
-      displayNumber(mainValue,"V",1,xOffset + 47,yOffset +6,FONT_MEDIUM,ALIGN_UNITS);
+      displayNumber(mainValue,"V",1,xOffset +54,yOffset +6,FONT_MEDIUM,ALIGN_UNITS);
       break;
 
     case UNIT_PERCENTAGE:
-      displayNumber(mainValue,"%",0,xOffset+47,yOffset+6,FONT_MEDIUM, ALIGN_UNITS);
+      displayNumber(mainValue,"%",1,xOffset+54,yOffset+6,FONT_MEDIUM,ALIGN_UNITS);
       break;
 
     default:
@@ -522,7 +532,7 @@ void loop()
       {
         float smallValue;
 
-        if (animate10s)
+        if (animate4s)
         {
           smallValue = values[position].maxValue;
           fromFlash(LABEL_MAX,str2,BUFFER2_SIZE);
@@ -535,7 +545,7 @@ void loop()
 
         // Has the time since we last received an update exceeded the timeout?
         // If so, flash the timeout alternately with the normal label
-        if (timeout && (((millis() - values[position].lastUpdate) / 1000) > timeout) && animate10s)
+        if (timeout && (((millis() - values[position].lastUpdate) / 1000) > timeout) && animate2s)
         {
             fromFlash(LABEL_TIMEOUT, str, BUFFER_SIZE);
         }
@@ -559,9 +569,18 @@ void loop()
   } 
   
   // Used for toggling slow animations on screen
-  if ((millis()-slowUpdate)>10000)
+  if ((millis()-slowUpdate)>1000)
   {
     slowUpdate = millis();
-    animate10s = !animate10s;
+    animateCounter++;
+
+    if (!(animateCounter%10))
+      animate10s = !animate10s;
+
+    if (!(animateCounter%4))
+      animate4s = !animate4s;
+
+    if (!(animateCounter%2))
+      animate2s = !animate2s;
   }
 }
