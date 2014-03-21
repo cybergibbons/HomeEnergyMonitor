@@ -13,28 +13,28 @@ RTC_Millis RTC;
 #include "font_metric02.h"
 #include "font_metric04.h"
 
-const int DISPLAY_ID  = 25; // Our ID (in case we send)
-const int INTERNAL_ID = 19; // The internal EmonTH node
-const int EXTERNAL_ID = 22; // The external EmonTH node
-const int POWER_ID    = 10; // The EmonTX node
-const int BASE_ID     = 15; // The Raspberry Pi base station (for receiving time updates)
-const int ENERGY_ID   = -1; // This is a fake node for integrating power to energy
+const byte DISPLAY_ID       = 25; // Our ID (in case we send)
+const byte INTERNAL_ID      = 19; // The byteernal EmonTH node
+const byte EXTERNAL_ID      = 22; // The external EmonTH node
+const byte POWER_ID         = 10; // The EmonTX node
+const byte BASE_ID          = 15; // The Raspberry Pi base station (for receiving time updates)
+const byte ENERGY_ID        = -1; // This is a fake node for integrating power to energy
 
-const int RF_FREQ      = RF12_433MHZ;   // frequency - match to same frequency as RFM12B module (change to 868Mhz or 915Mhz if appropriate)
-const int GROUP         = 210; 
+const byte RF_FREQ          = RF12_433MHZ;   // frequency - match to same frequency as RFM12B module (change to 868Mhz or 915Mhz if appropriate)
+const byte GROUP            = 210; 
 
-const int greenLED      = 6;         // Green tri-color LED
-const int redLED        = 9;           // Red tri-color LED
-const int LDRpin        = 4;           // analog pin of onboard lightsensor 
+const byte greenLED         = 6;         // Green tri-color LED
+const byte redLED           = 9;           // Red tri-color LED
+const byte LDRpin           = 4;           // analog pin of onboard lightsensor 
 
-const int BUFFER_SIZE   =  16;     // Used for string buffer - max half screen width
-const int BUFFER2_SIZE  = 4;      // Small buffer for the min/max
-const int DISP_REFRESH_INTERVAL = 200;
-const int POWER_TO_ENERGY_FACTOR = DISP_REFRESH_INTERVAL / 1000 / 3600000;
+const byte BUFFER_SIZE      =  16;     // Used for string buffer - max half screen width
+const byte BUFFER2_SIZE     = 4;      // Small buffer for the min/max
+const byte DISP_REFRESH_INTERVAL = 200;
+const float POWER_TO_ENERGY_FACTOR = DISP_REFRESH_INTERVAL / 1000 / 3600000;
 
-const float ILLEGAL_TEMP  = -127;
-const float ILLEGAL_POWER = -1; // This is not designed for import!
-
+/* ====================================
+Strings stored in flash
+==================================== */
 const prog_char LABEL_MIN[] PROGMEM = "MIN";
 const prog_char LABEL_MAX[] PROGMEM = "MAX";
 const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
@@ -53,6 +53,9 @@ const prog_char* VALUE_STRING_TABLE[] PROGMEM =
   LABEL_EXTERNAL,
   LABEL_VOLTAGE
 };
+/* ====================================
+End strings stored in flash
+==================================== */
 
 // Alightment of text
 typedef enum 
@@ -140,13 +143,14 @@ typedef struct {
   float currentValue,
   minValue,
   maxValue;
+  unsigned long lastUpdate;
 } value_t;
 
 value_t values[6];
 
-typedef struct { int power1, power2, power3, power4, Vrms, temp; } PayloadTX;         // neat way of packaging data for RF comms
-typedef struct { int temp1, temp2, humidity, voltage; } PayloadTH;
-typedef struct { char node, hour, minute; } PayloadBase;
+typedef struct { int power1, power2, power3, power4, Vrms, temp; }  PayloadTX;         // neat way of packaging data for RF comms
+typedef struct { int temp1, temp2, humidity, voltage; }             PayloadTH;
+typedef struct { char node, hour, minute; }                         PayloadBase;
 
 int hour = 12, minute = 0;
 
@@ -156,23 +160,6 @@ int currentPower;
 bool animate10s = true;
 
 unsigned long fastUpdate, slowUpdate;
-
-void setup()
-{
-  delay(500); 				   //wait for power to settle before firing up the RF
-  rf12_initialize(DISPLAY_ID, RF_FREQ,GROUP);
-  delay(100);				   //wait for RF to settle befor turning on display
-
-  glcd.begin(0x19);
-  glcd.backLight(255);
-
-  pinMode(greenLED, OUTPUT); 
-  pinMode(redLED, OUTPUT); 
-
-  // Make sure the values are not valid
-  for (int i=0; i<6; i++)
-    values[i].valid = 0;
-}
 
 void displayString(const char* str, byte xpos, byte ypos, font_t font, align_t align)
 {  
@@ -346,7 +333,7 @@ void rf12_process()
                 break;
 
               case 5:
-                value = payload.temp;
+                value = (float)payload.temp / 10.0;
                 break;
             } // End payload selection
             break; //End NODE_EMONTX
@@ -380,6 +367,7 @@ void rf12_process()
         if (value > values[position].maxValue)
           values[position].maxValue = value;
 
+        values[position].lastUpdate = millis();
         values[position].valid = true;
       }
     }
@@ -392,6 +380,23 @@ void glcd_backlight()
   int LDRbacklight = map(LDR, 0, 1023, 50, 250);    // Map the data from the LDR from 0-1023 (Max seen 1000) to var GLCDbrightness min/max
   LDRbacklight = constrain(LDRbacklight, 0, 255);   // Constrain the value to make sure its a PWM value 0-255)
   glcd.backLight(LDRbacklight);  
+}
+
+void setup()
+{
+  delay(500);            //wait for power to settle before firing up the RF
+  rf12_initialize(DISPLAY_ID, RF_FREQ,GROUP);
+  delay(100);          //wait for RF to settle befor turning on display
+
+  glcd.begin(0x19);
+  glcd.backLight(255);
+
+  pinMode(greenLED, OUTPUT); 
+  pinMode(redLED, OUTPUT); 
+
+  // Make sure the values are not valid
+  for (int i=0; i<6; i++)
+    values[i].valid = 0;
 }
 
 void loop()
