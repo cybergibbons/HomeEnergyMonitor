@@ -96,6 +96,13 @@ const prog_char* VALUE_STRING_TABLE[] PROGMEM =
 };
 
 // RF12 Node ID, Type of Node, Index of Value, Position in Display, Units
+// Use these for index into array 
+const byte I_NODE_ID = 0;
+const byte I_NODE_TYPE = 1;
+const byte I_NODE_VALUE = 2;
+const byte I_NODE_POSITION = 3;
+const byte I_NODE_UNITS = 4;
+
 FLASH_TABLE(byte, MAPPING_TABLE, 5,
   {POWER_ID, EMONTX_NODE, 0, POWER_DISPLAY, UNIT_POWER},
   {INTERNAL_ID, EMONTH_NODE, 0, INT_TEMP_DISPLAY, UNIT_TEMPERATURE},
@@ -268,19 +275,19 @@ void rf12_process()
     for (int i = 0; i < MAPPING_TABLE.rows(); i++)
     {
       // Does this ID exist in our mapping?
-      if (node_id == MAPPING_TABLE[i][0])
+      if (node_id == MAPPING_TABLE[i][I_NODE_ID])
       {
         float value;
         
         // Switch on the type of node
-        switch (MAPPING_TABLE[i][1])
+        switch (MAPPING_TABLE[i][I_NODE_TYPE])
         {
           case EMONTH_NODE:
           {
             PayloadTH payload = *(PayloadTH*) rf12_data;
 
             // Chose temp1 or temp2
-            if (MAPPING_TABLE[i][2] == 0)
+            if (MAPPING_TABLE[i][I_NODE_VALUE] == 0)
               value = (float)payload.temp1 / 10.0;
             else
               value = (float)payload.temp2 / 10.0;
@@ -291,7 +298,7 @@ void rf12_process()
           {
             PayloadTX payload = *(PayloadTX*) rf12_data;
 
-            switch(MAPPING_TABLE[i][2])
+            switch(MAPPING_TABLE[i][I_NODE_VALUE])
             {
               case 0:
                 value = payload.power1;
@@ -330,7 +337,7 @@ void rf12_process()
         } // End node type switch
 
         // messy writing this more than a couple of times.
-        byte position = MAPPING_TABLE[i][3];
+        byte position = MAPPING_TABLE[i][I_NODE_POSITION];
 
         values[position].currentValue = value;
 
@@ -397,8 +404,8 @@ void loop()
 
     for (int i = 0; i < MAPPING_TABLE.rows(); i++)    
     {
-      byte position = MAPPING_TABLE[i][3];
-      unit_t units = (unit_t)MAPPING_TABLE[i][4]; 
+      byte position = MAPPING_TABLE[i][I_NODE_POSITION];
+      unit_t units = (unit_t)MAPPING_TABLE[i][I_NODE_UNITS]; 
 
       if (values[position].valid)
       {
