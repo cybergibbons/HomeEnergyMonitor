@@ -30,7 +30,7 @@ const byte LDRpin           = 4;           // analog pin of onboard lightsensor
 const byte BUFFER_SIZE      =  16;     // Used for string buffer - max half screen width
 const byte BUFFER2_SIZE     = 4;      // Small buffer for the min/max
 const byte DISP_REFRESH_INTERVAL = 200;
-const float POWER_TO_ENERGY_FACTOR = DISP_REFRESH_INTERVAL / 1000 / 3600000;
+const float POWER_TO_ENERGY_FACTOR = DISP_REFRESH_INTERVAL / 1000 / 60 * 60 * 1000;
 
 /* ====================================
 Strings stored in flash
@@ -41,25 +41,39 @@ const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
 
 const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
 const prog_char LABEL_EXTERNAL[] PROGMEM = "EXT TEMP";
-const prog_char LABEL_NOTIMPLEMENTED[] = "NOT IMP";
 const prog_char LABEL_POWER[] PROGMEM = "POWER";
 const prog_char LABEL_ENERGY[] PROGMEM = "ENERGY";
 const prog_char LABEL_VOLTAGE[] PROGMEM = "VOLTAGE";
+const prog_char LABEL_NOTHING[] = "";
 
+// These need to be stored in the order they need to be displayed in the display
+// 
 const prog_char* VALUE_STRING_TABLE[] PROGMEM =
 {
-  LABEL_POWER,
+  LABEL_NOTHING,
+  LABEL_POWER, 
   LABEL_INTERNAL,
   LABEL_EXTERNAL,
+  LABEL_ENERGY,
   LABEL_VOLTAGE
 };
+
+// Used to index the the string table above
+enum{
+  I_LABEL_NOTHING,
+  I_LABEL_POWER,
+  I_LABEL_INTERNAL,
+  I_LABEL_EXTERNAL,
+  I_LABEL_ENERGY,
+  I_LABEL_VOLTAGE
+};
+
 /* ====================================
 End strings stored in flash
 ==================================== */
 
 // Alightment of text
-typedef enum 
-{
+typedef enum {
   ALIGN_LEFT, // Left of beginneing of string
   ALIGN_RIGHT, // Right of end of string
   ALIGN_CENTRE, // Middle of string
@@ -68,8 +82,7 @@ typedef enum
 
 // Which font to use?
 // Note this is very reliant on using the font_metric01/02/03.h fonts
-typedef enum
-{
+typedef enum{
   FONT_SMALL,
   FONT_MEDIUM,
   FONT_LARGE
@@ -87,6 +100,7 @@ typedef enum {
 
 // The type of node
 typedef enum {
+  NODE_NONE,
   NODE_EMONTX, // Standard EMONTX
   NODE_EMONTH, // Standard EMONTH
   NODE_RFM12PI // Standard RFM12PI sending the time
@@ -103,6 +117,7 @@ enum {
 
 // For I_NODE_VALUE on NODE_EMONTH
 enum {
+  VALUE_NONE,
   VALUE_EMONTH_TEMP1,
   VALUE_EMONTH_TEMP2,
   VALUE_EMONTH_HUMIDITY,
@@ -126,24 +141,29 @@ enum {
   I_NODE_TYPE = 1,
   I_NODE_VALUE = 2,
   I_NODE_POSITION = 3,
-  I_NODE_UNITS = 4
+  I_NODE_UNITS = 4,
+  I_NODE_LABEL = 5,
+  I_NODE_TIMEOUT = 6
 };
 
 // This holds all the details about the values we wish to display
-FLASH_TABLE(byte, MAPPING_TABLE, 5,
-// I_NODE_ID    I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS
-  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER},
-  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE},
-  {EXTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE},
-  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X0_Y1,            UNIT_VOLTAGE}
+FLASH_TABLE(byte, MAPPING_TABLE, 7,
+// I_NODE_ID    I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS      I_NODE_LABEL      I_NODE_TIMEOUT
+  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER,       I_LABEL_POWER,    30},
+  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE, I_LABEL_INTERNAL, 180},
+  {EXTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE, I_LABEL_EXTERNAL, 180},
+  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X1_Y1,            UNIT_VOLTAGE,     I_LABEL_VOLTAGE,  30},
+  // ENERGY is summed from power.
+  // Provide the valuye you wish to sum as a position int he display i.e. the power panel
+  {ENERGY_ID,   NODE_NONE,    X0_Y0,                X0_Y1,            UNIT_ENERGY,      I_LABEL_ENERGY,   0}
   );
 
 typedef struct {
-  bool valid;
-  float currentValue,
-  minValue,
-  maxValue;
-  unsigned long lastUpdate;
+  bool valid; // Have we received a reading yet? (also used to reset nightly values)
+  float currentValue, // Current value of the reading
+  minValue, // Minimum
+  maxValue; // Maximum
+  unsigned long lastUpdate; // Last millis() we received value
 } value_t;
 
 value_t values[6];
@@ -267,16 +287,18 @@ void renderPanel(unit_t typeValue, float mainValue, const char* mainLabel, float
 
     default:
       // We haven't implemented this type yet
-      displayString("ERR 2", xOffset+62,yOffset+6,FONT_MEDIUM,ALIGN_RIGHT);
+      displayString("ERR", xOffset+62,yOffset+6,FONT_MEDIUM,ALIGN_RIGHT);
   }
 }
 
+// Take a pointer to a string in flash and copy into a buffer
 void fromFlash(PGM_P string, char * buffer, byte len)
 {
     strncpy_P(buffer, string, len);
     buffer[len - 1] = '\0';
 }
 
+// When we receive a packet this copies the data into the values as required
 void rf12_process()
 {
   if (rf12_crc == 0 && (rf12_hdr & RF12_HDR_CTL) == 0)  // and no rf errors
@@ -415,8 +437,9 @@ void loop()
     hour = now.hour();
     minute = now.minute();
 
-    dailyEnergy += values[X0_Y0].currentValue * POWER_TO_ENERGY_FACTOR;
+
     
+    // Daily reset
     if (last_hour == 23 && hour == 00)
     {
       dailyEnergy = 0;                //reset Kwh/d counter at midnight
@@ -426,6 +449,21 @@ void loop()
       {
         byte position = MAPPING_TABLE[i][I_NODE_POSITION];
         values[position].valid = false;
+      }
+    }
+
+    // Perform the summing for energy values
+    for (int i =0; i < MAPPING_TABLE.rows(); i++)
+    {
+      if (MAPPING_TABLE[i][I_NODE_ID] == ENERGY_ID)
+      {
+        // Just to make the lower lines look a touch more readable.
+        byte position = MAPPING_TABLE[i][I_NODE_POSITION];
+        byte positionToSum = MAPPING_TABLE[i][I_NODE_VALUE];
+
+        // This takes the value from another display position and sums it for another position
+        // POWER_TO_ENERGY_FACTOR is (DISPLAY_REFRESH_TIME / 1000) / (60 * 60 * 1000)
+        values[position].currentValue += values[positionToSum].currentValue * POWER_TO_ENERGY_FACTOR;
       }
     }
 
@@ -440,6 +478,7 @@ void loop()
     for (int i = 0; i < MAPPING_TABLE.rows(); i++)    
     {
       byte position = MAPPING_TABLE[i][I_NODE_POSITION];
+      byte labelIndex = MAPPING_TABLE[i][I_NODE_LABEL];
       unit_t units = (unit_t)MAPPING_TABLE[i][I_NODE_UNITS]; 
 
       if (values[position].valid)
@@ -457,7 +496,7 @@ void loop()
           fromFlash(LABEL_MIN,str2,BUFFER2_SIZE);
         }
 
-        fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[position])),str,BUFFER_SIZE);
+        fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[labelIndex])),str,BUFFER_SIZE);
 
         renderPanel(units, values[position].currentValue, str, smallValue, str2, position/3, position%3);
       }
