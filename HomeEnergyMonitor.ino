@@ -562,6 +562,10 @@ void loop()
     fromFlash(LABEL_STATUS, str, BUFFER_SIZE);
     displayString(str,64,59,FONT_SMALL, ALIGN_CENTRE);
 
+    // A flashing dot to reassure display is updating
+    if (animate2s)
+      glcd.fillCircle(125,61,2,1);
+
     glcd.refresh();
 
     // Dim backlight from LDR reading
