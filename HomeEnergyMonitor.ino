@@ -30,16 +30,14 @@ const int LDRpin        = 4;           // analog pin of onboard lightsensor
 const int BUFFER_SIZE   =  16;     // Used for string buffer - max half screen width
 const int BUFFER2_SIZE  = 4;      // Small buffer for the min/max
 const int DISP_REFRESH_INTERVAL = 200;
+const int POWER_TO_ENERGY_FACTOR = DISP_REFRESH_INTERVAL / 1000 / 3600000;
 
 const float ILLEGAL_TEMP  = -127;
 const float ILLEGAL_POWER = -1; // This is not designed for import!
 
 
 
-const prog_char LABEL_MIN[] PROGMEM = "MIN";
-const prog_char LABEL_MAX[] PROGMEM = "MAX";
 
-const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
 
 // Alightment of text
 typedef enum 
@@ -49,6 +47,13 @@ typedef enum
   ALIGN_CENTRE,
   ALIGN_UNITS,
 } align_t;
+
+typedef enum
+{
+  FONT_SMALL,
+  FONT_MEDIUM,
+  FONT_LARGE
+} font_t;
 
 // Type of value
 typedef enum {
@@ -61,34 +66,45 @@ typedef enum {
 } unit_t;
 
 typedef enum {
-  POWER,
-  ENERGY,
-  DUMMY1,
-  DUMMY2,
-  INTERNAL_TEMP,
-  EXTERNAL_TEMP
-} position;
+  EMONTX_NODE,
+  EMONTH_NODE,
+  BASE_NODE
+} node_t;
+
+
+const byte POWER_DISPLAY = 0;
+const byte INT_TEMP_DISPLAY = 1;
+const byte EXT_TEMP_DISPLAY = 2;
+
+const prog_char LABEL_MIN[] PROGMEM = "MIN";
+const prog_char LABEL_MAX[] PROGMEM = "MAX";
+const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
 
 const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
 const prog_char LABEL_EXTERNAL[] PROGMEM = "EXT TEMP";
 const prog_char LABEL_NOTIMPLEMENTED[] = "NOT IMP";
 const prog_char LABEL_POWER[] PROGMEM = "POWER";
 const prog_char LABEL_ENERGY[] PROGMEM = "ENERGY";
+const prog_char LABEL_VOLTAGE[] PROGMEM = "VOLTAGE";
 
-const prog_char* UNIT_STRING_TABLE[] PROGMEM =
+const prog_char* VALUE_STRING_TABLE[] PROGMEM =
 {
   LABEL_POWER,
-  LABEL_ENERGY,
-  LABEL_NOTIMPLEMENTED,
-  LABEL_NOTIMPLEMENTED,
   LABEL_INTERNAL,
-  LABEL_EXTERNAL
+  LABEL_EXTERNAL,
+  LABEL_VOLTAGE
 };
 
+// RF12 Node ID, Type of Node, Index of Value, Position in Display, Units
+FLASH_TABLE(byte, MAPPING_TABLE, 5,
+  {POWER_ID, EMONTX_NODE, 0, POWER_DISPLAY, UNIT_POWER},
+  {INTERNAL_ID, EMONTH_NODE, 0, INT_TEMP_DISPLAY, UNIT_TEMPERATURE},
+  {EXTERNAL_ID, EMONTH_NODE, 1, EXT_TEMP_DISPLAY, UNIT_TEMPERATURE},
+  {POWER_ID, EMONTX_NODE, 4, 3, UNIT_VOLTAGE}
+  );
 
 typedef struct {
   bool valid;
-  unit_t unitType;
   float currentValue,
   minValue,
   maxValue;
@@ -96,15 +112,9 @@ typedef struct {
 
 value_t values[6];
 
-typedef struct { int power1, power2, power3, Vrms; } PayloadTX;         // neat way of packaging data for RF comms
-PayloadTX emontx;
-
-
+typedef struct { int power1, power2, power3, power4, Vrms, temp; } PayloadTX;         // neat way of packaging data for RF comms
 typedef struct { int temp1, temp2, humidity, voltage; } PayloadTH;
-PayloadTH emonth;
-
-typedef struct {char node, hour, minute; } PayloadBase;
-PayloadBase base;
+typedef struct { char node, hour, minute; } PayloadBase;
 
 int hour = 12, minute = 0;
 
@@ -132,7 +142,7 @@ void setup()
     values[i].valid = 0;
 }
 
-void displayString(const char* str, byte xpos, byte ypos, byte font, align_t align)
+void displayString(const char* str, byte xpos, byte ypos, font_t font, align_t align)
 {  
   byte width;
 
@@ -140,19 +150,19 @@ void displayString(const char* str, byte xpos, byte ypos, byte font, align_t ali
   // Too much work to align with others
   switch (font)
   {
-    case 1:
+    case FONT_SMALL:
       glcd.setFont(font_metric01);
       // 3 wide + 1 for space
       width = 4;
       break;
 
-    case 2:
+    case FONT_MEDIUM:
       glcd.setFont(font_metric02);
       // 7 wide + 1 for space
       width = 8;
       break;
 
-    case 3:
+    case FONT_LARGE:
       glcd.setFont(font_metric04);
       // 15 wide + 1 for space
       width = 16;
@@ -182,7 +192,7 @@ void displayString(const char* str, byte xpos, byte ypos, byte font, align_t ali
 }
 
 // Add units to the value and display string
-void displayNumber(float value, const char* units, byte decimalPlaces, byte xpos, byte ypos, byte font, align_t align)
+void displayNumber(float value, const char* units, byte decimalPlaces, byte xpos, byte ypos, font_t font, align_t align)
 {
   char str[BUFFER_SIZE];
 
@@ -202,39 +212,43 @@ void renderPanel(unit_t typeValue, float mainValue, const char* mainLabel, float
 
   // The main label at the top in small font
   // 15 characters max
-  displayString(mainLabel,xOffset+55,yOffset,1,ALIGN_RIGHT);
+  displayString(mainLabel,xOffset+55,yOffset,FONT_SMALL,ALIGN_RIGHT);
 
   switch (typeValue)
   { 
     case UNIT_TEMPERATURE:
       // * is deg symbol in the monospaced font used
-      displayNumber(mainValue,"*",1,xOffset+54,yOffset+6,2,ALIGN_UNITS);
+      displayNumber(mainValue,"*",1,xOffset+54,yOffset+6,FONT_MEDIUM,ALIGN_UNITS);
       
       // Small label - 4 characters max but 3 looks less cramped
-      displayString(smallLabel,xOffset,yOffset+6,1,ALIGN_LEFT);
-      displayNumber(smallValue,"*",1,xOffset,yOffset+13,1,ALIGN_LEFT);
+      displayString(smallLabel,xOffset,yOffset+6,FONT_SMALL,ALIGN_LEFT);
+      displayNumber(smallValue,"*",1,xOffset,yOffset+13,FONT_SMALL,ALIGN_LEFT);
       break;
 
     case UNIT_POWER:
       if((mainValue > 1000) || (mainValue< -1000))
       {
-        // KW with 0dp
-        displayNumber(mainValue,"KW",1,xOffset + 47,yOffset + 6,2,ALIGN_UNITS);  
+        // KW with 1dp
+        displayNumber(mainValue,"KW",1,xOffset + 47,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS);  
       }
       else
       {
         // W with 0dp
-        displayNumber(mainValue,"W",0,xOffset + 47,yOffset + 6,2,ALIGN_UNITS); 
+        displayNumber(mainValue,"W",0,xOffset + 47,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS); 
       }
       break;
 
     case UNIT_ENERGY:
-      displayNumber(mainValue,"KWH",1,xOffset + 38,yOffset + 6,2,ALIGN_UNITS);
+      displayNumber(mainValue,"KWH",1,xOffset + 38,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS);
+      break;
+
+    case UNIT_VOLTAGE:
+      displayNumber(mainValue,"V",1,xOffset + 47,yOffset +6,FONT_MEDIUM,ALIGN_UNITS);
       break;
 
     default:
       // We haven't implemented this type yet
-      displayString("ERR 2", xOffset+62,yOffset+6,2,ALIGN_RIGHT);
+      displayString("ERR 2", xOffset+62,yOffset+6,FONT_MEDIUM,ALIGN_RIGHT);
   }
 }
 
@@ -244,85 +258,115 @@ void fromFlash(PGM_P string, char * buffer, byte len)
     buffer[len - 1] = '\0';
 }
 
+void rf12_process()
+{
+  if (rf12_crc == 0 && (rf12_hdr & RF12_HDR_CTL) == 0)  // and no rf errors
+  {
+    int node_id = (rf12_hdr & 0x1F);
+
+    // RF12 Node ID, Type of Node, Index of Value, Position in Display, Units
+    for (int i = 0; i < MAPPING_TABLE.rows(); i++)
+    {
+      // Does this ID exist in our mapping?
+      if (node_id == MAPPING_TABLE[i][0])
+      {
+        float value;
+        
+        // Switch on the type of node
+        switch (MAPPING_TABLE[i][1])
+        {
+          case EMONTH_NODE:
+          {
+            PayloadTH payload = *(PayloadTH*) rf12_data;
+
+            // Chose temp1 or temp2
+            if (MAPPING_TABLE[i][2] == 0)
+              value = (float)payload.temp1 / 10.0;
+            else
+              value = (float)payload.temp2 / 10.0;
+          }
+          break; // End EMONTH_NODE case
+
+          case EMONTX_NODE:
+          {
+            PayloadTX payload = *(PayloadTX*) rf12_data;
+
+            switch(MAPPING_TABLE[i][2])
+            {
+              case 0:
+                value = payload.power1;
+                break;
+
+              case 1:
+                value = payload.power2;
+                break;
+
+              case 2:
+                value = payload.power3;
+                break;
+
+              case 3:
+                value = payload.power4;
+                break;
+
+              case 4:
+                value = (float)payload.Vrms / 100.0;
+                break;
+
+              case 5:
+                value = payload.temp;
+                break;
+            } // End payload selection
+            break; //End EMONTX_NODE
+          }
+
+            case BASE_NODE:
+            {
+              PayloadBase payload = *(PayloadBase*) rf12_data;
+              RTC.adjust(DateTime(2014, 1, 1, payload.hour, payload.minute, 0));
+              break;
+            } // End BASE_NODE
+
+        } // End node type switch
+
+        // messy writing this more than a couple of times.
+        byte position = MAPPING_TABLE[i][3];
+
+        values[position].currentValue = value;
+
+        // If this is the first valid reading, reset min/max
+        // Also daily reset
+        if (!values[position].valid)
+        {
+          values[position].minValue = value;
+          values[position].maxValue = value;
+        }
+
+        if (value < values[position].minValue)
+          values[position].minValue = value;
+
+        if (value > values[position].maxValue)
+          values[position].maxValue = value;
+
+        values[position].valid = true;
+      }
+    }
+  }
+}
+
+void glcd_backlight()
+{
+  int LDR = analogRead(LDRpin);                     // Read the LDR Value so we can work out the light level in the room.
+  int LDRbacklight = map(LDR, 0, 1023, 50, 250);    // Map the data from the LDR from 0-1023 (Max seen 1000) to var GLCDbrightness min/max
+  LDRbacklight = constrain(LDRbacklight, 0, 255);   // Constrain the value to make sure its a PWM value 0-255)
+  glcd.backLight(LDRbacklight);  
+}
+
 void loop()
 {
   if (rf12_recvDone())
   {
-    if (rf12_crc == 0 && (rf12_hdr & RF12_HDR_CTL) == 0)  // and no rf errors
-    {
-      int node_id = (rf12_hdr & 0x1F);
-
-      if (node_id == POWER_ID) {
-          emontx = *(PayloadTX*) rf12_data;
-          float value = emontx.power1;
-
-          values[POWER].unitType = UNIT_POWER;
-          values[POWER].currentValue = value;
-
-          if (!values[POWER].valid)
-          {
-            values[POWER].minValue = value;
-            values[POWER].maxValue = value;
-            values[POWER].valid = true;
-          }
-
-          if (value < values[POWER].minValue)
-            values[POWER].minValue = value;
-
-          if (value > values[POWER].maxValue)
-            values[POWER].maxValue = value;
-      }  
-      
-      if (node_id == BASE_ID)
-      {
-        base = *(PayloadBase*) rf12_data;
-        RTC.adjust(DateTime(2014, 1, 1, base.hour, base.minute, 0));
-      } 
-      
-      if (node_id == EXTERNAL_ID) 
-      {
-        emonth = *(PayloadTH*) rf12_data;
-        float value = (double)emonth.temp2 / 10.0;
-
-          values[EXTERNAL_TEMP].unitType = UNIT_TEMPERATURE;
-          values[EXTERNAL_TEMP].currentValue = value;
-        
-        if (!values[EXTERNAL_TEMP].valid)
-          {
-            values[EXTERNAL_TEMP].minValue = value;
-            values[EXTERNAL_TEMP].maxValue = value;
-            values[EXTERNAL_TEMP].valid = true;
-          }
-
-          if (value < values[EXTERNAL_TEMP].minValue)
-            values[EXTERNAL_TEMP].minValue = value;
-
-          if (value > values[EXTERNAL_TEMP].maxValue)
-            values[EXTERNAL_TEMP].maxValue = value;
-      }
-      
-      if (node_id == INTERNAL_ID) 
-      {
-        emonth = *(PayloadTH*) rf12_data;
-        float value = (double)emonth.temp1 / 10.0;
-
-        values[INTERNAL_TEMP].unitType = UNIT_TEMPERATURE;
-        values[INTERNAL_TEMP].currentValue = value;
-
-        if (!values[INTERNAL_TEMP].valid)
-          {
-            values[INTERNAL_TEMP].minValue = value;
-            values[INTERNAL_TEMP].maxValue = value;
-            values[INTERNAL_TEMP].valid = true;
-          }
-
-          if (value < values[INTERNAL_TEMP].minValue)
-            values[INTERNAL_TEMP].minValue = value;
-
-          if (value > values[INTERNAL_TEMP].maxValue)
-            values[INTERNAL_TEMP].maxValue = value;
-      }
-    }
+    rf12_process();
   }
   
   if ((millis()-fastUpdate)>DISP_REFRESH_INTERVAL)
@@ -334,16 +378,16 @@ void loop()
     hour = now.hour();
     minute = now.minute();
 
-    dailyEnergy += (emontx.power1 * 0.2) / 3600000;
+    dailyEnergy += values[POWER_DISPLAY].currentValue * POWER_TO_ENERGY_FACTOR;
     
     if (last_hour == 23 && hour == 00)
     {
       dailyEnergy = 0;                //reset Kwh/d counter at midnight
-      values[INTERNAL_TEMP].valid = false;
-      values[EXTERNAL_TEMP].valid = false;
+      values[INT_TEMP_DISPLAY].valid = false;
+      values[EXT_TEMP_DISPLAY].valid = false;
     }
 
-    currentPower = currentPower + (emontx.power1 - currentPower)*0.50;        //smooth transitions
+    //currentPower = currentPower + (emontx.power1 - currentPower)*0.50;        //smooth transitions
     
     glcd.clear();
     glcd.drawLine(63, 0, 63, 57, WHITE); // dividing line
@@ -351,45 +395,45 @@ void loop()
     char str[BUFFER_SIZE];
     char str2[BUFFER2_SIZE];
 
-    for (int i=0; i<6 ; i++)
+    for (int i = 0; i < MAPPING_TABLE.rows(); i++)    
     {
-      if (values[i].valid)
+      byte position = MAPPING_TABLE[i][3];
+      unit_t units = (unit_t)MAPPING_TABLE[i][4]; 
+
+      if (values[position].valid)
       {
         float smallValue;
 
         if (animate10s)
         {
-          smallValue = values[i].maxValue;
+          smallValue = values[position].maxValue;
           fromFlash(LABEL_MAX,str2,BUFFER2_SIZE);
         }
         else
         {
-          smallValue = values[i].minValue;
+          smallValue = values[position].minValue;
           fromFlash(LABEL_MIN,str2,BUFFER2_SIZE);
         }
 
-        fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[i])),str,BUFFER_SIZE);
+        fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[position])),str,BUFFER_SIZE);
 
-
-        renderPanel(values[i].unitType, values[i].currentValue, str, smallValue, str2, i/3, i%3);
+        renderPanel(units, values[position].currentValue, str, smallValue, str2, position/3, position%3);
       }
     }
 
     fromFlash(LABEL_STATUS, str, BUFFER_SIZE);
+    displayString(str,64,59,FONT_SMALL, ALIGN_CENTRE);
 
-    displayString(str,64,59,1, ALIGN_CENTRE);
     glcd.refresh();
 
-    int LDR = analogRead(LDRpin);                     // Read the LDR Value so we can work out the light level in the room.
-    int LDRbacklight = map(LDR, 0, 1023, 50, 250);    // Map the data from the LDR from 0-1023 (Max seen 1000) to var GLCDbrightness min/max
-    LDRbacklight = constrain(LDRbacklight, 0, 255);   // Constrain the value to make sure its a PWM value 0-255)
-    glcd.backLight(LDRbacklight);  
+    // Dim backlight from LDR reading
+    glcd_backlight();
   } 
   
+  // Used for toggling slow animations on screen
   if ((millis()-slowUpdate)>10000)
   {
     slowUpdate = millis();
-
     animate10s = !animate10s;
   }
 }
