@@ -14,7 +14,8 @@ RTC_Millis RTC;
 #include "font_metric04.h"
 
 const byte DISPLAY_ID       = 25; // Our ID (in case we send)
-const byte INTERNAL_ID      = 19; // The byteernal EmonTH node
+const byte INTERNAL_ID      = 19; // The internal EmonTH node
+const byte BEDROOM_ID       = 20;
 const byte EXTERNAL_ID      = 22; // The external EmonTH node
 const byte POWER_ID         = 10; // The EmonTX node
 const byte BASE_ID          = 15; // The Raspberry Pi base station (for receiving time updates)
@@ -40,11 +41,13 @@ const prog_char LABEL_MAX[] PROGMEM = "MAX";
 const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
 const prog_char LABEL_TIMEOUT[] PROGMEM = "TIMED OUT";
 
-const prog_char LABEL_INTERNAL[] PROGMEM = "INT TEMP";
-const prog_char LABEL_EXTERNAL[] PROGMEM = "EXT TEMP";
+const prog_char LABEL_INTERNAL1[] PROGMEM = "LOUNGE TEMP";
+const prog_char LABEL_INTERNAL2[] PROGMEM = "BEDROOM TEMP";
+const prog_char LABEL_EXTERNAL[] PROGMEM = "OUTSIDE TEMP";
 const prog_char LABEL_POWER[] PROGMEM = "POWER";
 const prog_char LABEL_ENERGY[] PROGMEM = "ENERGY";
 const prog_char LABEL_VOLTAGE[] PROGMEM = "VOLTAGE";
+const prog_char LABEL_HUMIDITY[] PROGMEM = "HUMIDITY";
 const prog_char LABEL_NOTHING[] = "";
 
 // These need to be stored in the order they need to be displayed in the display
@@ -53,20 +56,24 @@ const prog_char* VALUE_STRING_TABLE[] PROGMEM =
 {
   LABEL_NOTHING,
   LABEL_POWER, 
-  LABEL_INTERNAL,
+  LABEL_INTERNAL1,
+  LABEL_INTERNAL2,
   LABEL_EXTERNAL,
   LABEL_ENERGY,
-  LABEL_VOLTAGE
+  LABEL_VOLTAGE,
+  LABEL_HUMIDITY
 };
 
 // Used to index the the string table above
 enum{
   I_LABEL_NOTHING,
   I_LABEL_POWER,
-  I_LABEL_INTERNAL,
+  I_LABEL_INTERNAL1,
+  I_LABEL_INTERNAL2,
   I_LABEL_EXTERNAL,
   I_LABEL_ENERGY,
-  I_LABEL_VOLTAGE
+  I_LABEL_VOLTAGE,
+  I_LABEL_HUMIDITY
 };
 
 /* ====================================
@@ -118,7 +125,6 @@ enum {
 
 // For I_NODE_VALUE on NODE_EMONTH
 enum {
-  VALUE_NONE,
   VALUE_EMONTH_TEMP1,
   VALUE_EMONTH_TEMP2,
   VALUE_EMONTH_HUMIDITY,
@@ -151,12 +157,14 @@ enum {
 FLASH_TABLE(byte, MAPPING_TABLE, 7,
 // I_NODE_ID    I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS      I_NODE_LABEL      I_NODE_TIMEOUT
   {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER,       I_LABEL_POWER,    30},
-  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE, I_LABEL_INTERNAL, 180},
+  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE, I_LABEL_INTERNAL1, 180},
   {EXTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE, I_LABEL_EXTERNAL, 180},
-  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X1_Y1,            UNIT_VOLTAGE,     I_LABEL_VOLTAGE,  30},
+  {BEDROOM_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y1,            UNIT_TEMPERATURE, I_LABEL_INTERNAL2, 180},
+  //{POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X1_Y1,            UNIT_VOLTAGE,     I_LABEL_VOLTAGE,  30},
   // ENERGY is summed from power.
   // Provide the valuye you wish to sum as a position int he display i.e. the power panel
-  {ENERGY_ID,   NODE_NONE,    X0_Y0,                X0_Y1,            UNIT_ENERGY,      I_LABEL_ENERGY,   0}
+  {ENERGY_ID,   NODE_NONE,    X0_Y0,                X0_Y1,            UNIT_ENERGY,      I_LABEL_ENERGY,   0},
+  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_HUMIDITY,X2_Y1,            UNIT_PERCENTAGE,  I_LABEL_HUMIDITY, 180}
   );
 
 typedef struct {
@@ -269,7 +277,7 @@ void renderPanel(unit_t typeValue, float mainValue, const char* mainLabel, float
       if((mainValue > 1000) || (mainValue< -1000))
       {
         // KW with 1dp
-        displayNumber(mainValue,"KW",1,xOffset + 47,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS);  
+        displayNumber(mainValue/1000.0,"KW",1,xOffset + 47,yOffset + 6,FONT_MEDIUM,ALIGN_UNITS);  
       }
       else
       {
@@ -284,6 +292,10 @@ void renderPanel(unit_t typeValue, float mainValue, const char* mainLabel, float
 
     case UNIT_VOLTAGE:
       displayNumber(mainValue,"V",1,xOffset + 47,yOffset +6,FONT_MEDIUM,ALIGN_UNITS);
+      break;
+
+    case UNIT_PERCENTAGE:
+      displayNumber(mainValue,"%",0,xOffset+47,yOffset+6,FONT_MEDIUM, ALIGN_UNITS);
       break;
 
     default:
@@ -326,6 +338,25 @@ void rf12_process()
               value = (float)payload.temp1 / 10.0;
             else
               value = (float)payload.temp2 / 10.0;
+
+            switch(MAPPING_TABLE[i][I_NODE_VALUE])
+            {
+              case VALUE_EMONTH_TEMP1:
+                value = (float)payload.temp1 / 10.0;
+                break;
+
+              case VALUE_EMONTH_TEMP2:
+                value = (float)payload.temp2 / 10.0;
+                break;
+
+              case VALUE_EMONTH_HUMIDITY:
+                value = (float)payload.humidity / 10.0;
+                break;
+
+              case VALUE_EMONTH_BATTERY:
+                value = (float)payload.voltage / 10.0;
+                break;
+            }
           }
           break; // End NODE_EMONTH case
 
@@ -438,8 +469,6 @@ void loop()
     hour = now.hour();
     minute = now.minute();
 
-
-    
     // Daily reset
     if (last_hour == 23 && hour == 00)
     {
@@ -464,7 +493,11 @@ void loop()
 
         // This takes the value from another display position and sums it for another position
         // POWER_TO_ENERGY_FACTOR is (DISPLAY_REFRESH_TIME / 1000) / (60 * 60 * 1000)
-        values[position].currentValue += values[positionToSum].currentValue * POWER_TO_ENERGY_FACTOR;
+        if (values[positionToSum].valid)
+        {
+          values[position].currentValue += values[positionToSum].currentValue * POWER_TO_ENERGY_FACTOR;
+          values[position].valid = true;
+        }
       }
     }
 
@@ -502,7 +535,7 @@ void loop()
 
         // Has the time since we last received an update exceeded the timeout?
         // If so, flash the timeout alternately with the normal label
-        if ((((millis() - values[position].lastUpdate) / 1000) > timeout) && animate10s)
+        if (timeout && (((millis() - values[position].lastUpdate) / 1000) > timeout) && animate10s)
         {
             fromFlash(LABEL_TIMEOUT, str, BUFFER_SIZE);
         }
