@@ -13,9 +13,9 @@ RTC_Millis RTC;
 #include "font_metric02.h"
 #include "font_metric04.h"
 
-const byte DISPLAY_ID       = 25; // Our ID (in case we send)
-const byte INTERNAL_ID      = 19; // The internal EmonTH node
-const byte BEDROOM_ID       = 20;
+const byte DISPLAY_ID       = 25; // Our ID (in case we send - no functionality currently)
+const byte INTERNAL1_ID     = 19; // The first internal EmonTH node
+const byte INTERNAL2_ID       = 20;
 const byte EXTERNAL_ID      = 22; // The external EmonTH node
 const byte POWER_ID         = 10; // The EmonTX node
 const byte BASE_ID          = 15; // The Raspberry Pi base station (for receiving time updates)
@@ -38,7 +38,7 @@ Strings stored in flash
 ==================================== */
 const prog_char LABEL_MIN[] PROGMEM = "MIN";
 const prog_char LABEL_MAX[] PROGMEM = "MAX";
-const prog_char LABEL_STATUS[] PROGMEM = "STATUS UPDATE";
+const prog_char LABEL_STATUS[] PROGMEM = "OPEN ENERGY MON";
 const prog_char LABEL_TIMEOUT[] PROGMEM = "TIMED OUT";
 
 const prog_char LABEL_INTERNAL1[] PROGMEM = "LOUNGE TEMP";
@@ -119,6 +119,7 @@ enum {
   VALUE_EMONTX_POWER1,
   VALUE_EMONTX_POWER2,
   VALUE_EMONTX_POWER3,
+  VALUE_EMONTX_POWER4,
   VALUE_EMONTX_VRMS,
   VALUE_EMONTX_TEMP
 };
@@ -155,16 +156,16 @@ enum {
 
 // This holds all the details about the values we wish to display
 FLASH_TABLE(byte, MAPPING_TABLE, 7,
-// I_NODE_ID    I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS      I_NODE_LABEL      I_NODE_TIMEOUT
-  {POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER,       I_LABEL_POWER,    30},
-  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE, I_LABEL_INTERNAL1, 180},
-  {EXTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE, I_LABEL_EXTERNAL, 180},
-  {BEDROOM_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y1,            UNIT_TEMPERATURE, I_LABEL_INTERNAL2, 180},
+// I_NODE_ID      I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS      I_NODE_LABEL      I_NODE_TIMEOUT
+  {POWER_ID,      NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER,       I_LABEL_POWER,    30},
+  {INTERNAL1_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE, I_LABEL_INTERNAL1, 180},
+  {EXTERNAL_ID,   NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE, I_LABEL_EXTERNAL, 180},
+  {INTERNAL2_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y1,            UNIT_TEMPERATURE, I_LABEL_INTERNAL2, 180},
   //{POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X1_Y1,            UNIT_VOLTAGE,     I_LABEL_VOLTAGE,  30},
   // ENERGY is summed from power.
   // Provide the valuye you wish to sum as a position int he display i.e. the power panel
-  {ENERGY_ID,   NODE_NONE,    X0_Y0,                X0_Y1,            UNIT_ENERGY,      I_LABEL_ENERGY,   0},
-  {INTERNAL_ID, NODE_EMONTH,  VALUE_EMONTH_HUMIDITY,X2_Y1,            UNIT_PERCENTAGE,  I_LABEL_HUMIDITY, 180}
+  {ENERGY_ID,     NODE_NONE,    X0_Y0,                X0_Y1,            UNIT_ENERGY,      I_LABEL_ENERGY,   0},
+  {INTERNAL1_ID,  NODE_EMONTH,  VALUE_EMONTH_HUMIDITY,X2_Y1,            UNIT_PERCENTAGE,  I_LABEL_HUMIDITY, 180}
   );
 
 typedef struct {
@@ -175,16 +176,13 @@ typedef struct {
   unsigned long lastUpdate; // Last millis() we received value
 } value_t;
 
-value_t values[6];
+value_t values[6]; // values are linked to display panel
 
-typedef struct { int power1, power2, power3, power4, Vrms, temp; }  PayloadTX;         // neat way of packaging data for RF comms
-typedef struct { int temp1, temp2, humidity, voltage; }             PayloadTH;
+typedef struct { int power1, power2, power3, power4, Vrms, temp; }  PayloadTX;
+typedef struct { int temp1, temp2, humidity, battery; }             PayloadTH;
 typedef struct { char node, hour, minute; }                         PayloadBase;
 
-int hour = 12, minute = 0;
-
-double dailyEnergy = 0;
-int currentPower;
+byte hour = 12, minute = 0;
 
 byte animateCounter = 0;
 bool animate2s = false;
@@ -244,6 +242,32 @@ void displayString(const char* str, byte xpos, byte ypos, font_t font, align_t a
   }   
 
   glcd.drawString(xpos,ypos,str); 
+}
+
+void displayTime(byte hour, byte minute, byte xpos, byte ypos, font_t font, align_t align)
+{
+  char str[6] = ""; // 00:00
+  char str2[3] = ""; // 00
+
+  // Pad the hour if less than 10
+  if (hour < 10)
+    strcat(str,"0");
+  else
+    strcat(str," ");
+
+  itoa(hour,str2,10);
+  strcat(str,str2);
+
+  // Pad the minute if less than 10
+  if (minute < 10)
+    strcat(str,":0");
+  else
+    strcat(str,":");
+
+  itoa(minute, str2, 10);
+  strcat(str,str2);
+
+  displayString(str,xpos,ypos,font,align);
 }
 
 // Add units to the value and display string
@@ -328,111 +352,111 @@ void rf12_process()
   {
     int node_id = (rf12_hdr & 0x1F);
 
-    // RF12 Node ID, Type of Node, Index of Value, Position in Display, Units
-    for (int i = 0; i < MAPPING_TABLE.rows(); i++)
+    if (node_id == BASE_ID)
     {
-      // Does this ID exist in our mapping?
-      if (node_id == MAPPING_TABLE[i][I_NODE_ID])
+      PayloadBase payload = *(PayloadBase*) rf12_data;
+      RTC.adjust(DateTime(2014, 1, 1, payload.hour, payload.minute, 0)); 
+    }
+    else
+    {
+      // RF12 Node ID, Type of Node, Index of Value, Position in Display, Units
+      for (int i = 0; i < MAPPING_TABLE.rows(); i++)
       {
-        float value;
-        
-        // Switch on the type of node
-        switch (MAPPING_TABLE[i][I_NODE_TYPE])
+        // Does this ID exist in our mapping?
+        if (node_id == MAPPING_TABLE[i][I_NODE_ID])
         {
-          case NODE_EMONTH:
+          float value;
+          
+          // Switch on the type of node
+          switch (MAPPING_TABLE[i][I_NODE_TYPE])
           {
-            PayloadTH payload = *(PayloadTH*) rf12_data;
-
-            // Chose temp1 or temp2
-            if (MAPPING_TABLE[i][I_NODE_VALUE] == 0)
-              value = (float)payload.temp1 / 10.0;
-            else
-              value = (float)payload.temp2 / 10.0;
-
-            switch(MAPPING_TABLE[i][I_NODE_VALUE])
+            case NODE_EMONTH:
             {
-              case VALUE_EMONTH_TEMP1:
+              PayloadTH payload = *(PayloadTH*) rf12_data;
+
+              // Chose temp1 or temp2
+              if (MAPPING_TABLE[i][I_NODE_VALUE] == 0)
                 value = (float)payload.temp1 / 10.0;
-                break;
-
-              case VALUE_EMONTH_TEMP2:
+              else
                 value = (float)payload.temp2 / 10.0;
-                break;
 
-              case VALUE_EMONTH_HUMIDITY:
-                value = (float)payload.humidity / 10.0;
-                break;
+              switch(MAPPING_TABLE[i][I_NODE_VALUE])
+              {
+                case VALUE_EMONTH_TEMP1:
+                  value = (float)payload.temp1 / 10.0;
+                  break;
 
-              case VALUE_EMONTH_BATTERY:
-                value = (float)payload.voltage / 10.0;
-                break;
+                case VALUE_EMONTH_TEMP2:
+                  value = (float)payload.temp2 / 10.0;
+                  break;
+
+                case VALUE_EMONTH_HUMIDITY:
+                  value = (float)payload.humidity / 10.0;
+                  break;
+
+                case VALUE_EMONTH_BATTERY:
+                  value = (float)payload.battery / 10.0;
+                  break;
+              }
             }
-          }
-          break; // End NODE_EMONTH case
+            break; // End NODE_EMONTH case
 
-          case NODE_EMONTX:
+            case NODE_EMONTX:
+            {
+              PayloadTX payload = *(PayloadTX*) rf12_data;
+
+              switch(MAPPING_TABLE[i][I_NODE_VALUE])
+              {
+                case VALUE_EMONTX_POWER1:
+                  value = payload.power1;
+                  break;
+
+                case VALUE_EMONTX_POWER2:
+                  value = payload.power2;
+                  break;
+
+                case VALUE_EMONTX_POWER3:
+                  value = payload.power3;
+                  break;
+
+                case VALUE_EMONTX_POWER4:
+                  value = payload.power4;
+                  break;
+
+                case VALUE_EMONTX_VRMS:
+                  value = (float)payload.Vrms / 100.0;
+                  break;
+
+                case VALUE_EMONTX_TEMP:
+                  value = (float)payload.temp / 10.0;
+                  break;
+              } // End payload selection
+              break; //End NODE_EMONTX
+            }
+          } // End node type switch
+
+          // messy writing this more than a couple of times.
+          byte position = MAPPING_TABLE[i][I_NODE_POSITION];
+
+          values[position].currentValue = value;
+
+          // If this is the first valid reading, reset min/max
+          // Also daily reset
+          if (!values[position].valid)
           {
-            PayloadTX payload = *(PayloadTX*) rf12_data;
-
-            switch(MAPPING_TABLE[i][I_NODE_VALUE])
-            {
-              case 0:
-                value = payload.power1;
-                break;
-
-              case 1:
-                value = payload.power2;
-                break;
-
-              case 2:
-                value = payload.power3;
-                break;
-
-              case 3:
-                value = payload.power4;
-                break;
-
-              case 4:
-                value = (float)payload.Vrms / 100.0;
-                break;
-
-              case 5:
-                value = (float)payload.temp / 10.0;
-                break;
-            } // End payload selection
-            break; //End NODE_EMONTX
+            values[position].minValue = value;
+            values[position].maxValue = value;
           }
 
-            case NODE_RFM12PI:
-            {
-              PayloadBase payload = *(PayloadBase*) rf12_data;
-              RTC.adjust(DateTime(2014, 1, 1, payload.hour, payload.minute, 0));
-              break;
-            } // End NODE_RFM12PI
+          if (value < values[position].minValue)
+            values[position].minValue = value;
 
-        } // End node type switch
+          if (value > values[position].maxValue)
+            values[position].maxValue = value;
 
-        // messy writing this more than a couple of times.
-        byte position = MAPPING_TABLE[i][I_NODE_POSITION];
-
-        values[position].currentValue = value;
-
-        // If this is the first valid reading, reset min/max
-        // Also daily reset
-        if (!values[position].valid)
-        {
-          values[position].minValue = value;
-          values[position].maxValue = value;
+          values[position].lastUpdate = millis();
+          values[position].valid = true;
         }
-
-        if (value < values[position].minValue)
-          values[position].minValue = value;
-
-        if (value > values[position].maxValue)
-          values[position].maxValue = value;
-
-        values[position].lastUpdate = millis();
-        values[position].valid = true;
       }
     }
   }
@@ -441,7 +465,7 @@ void rf12_process()
 void glcd_backlight()
 {
   int LDR = analogRead(LDRpin);                     // Read the LDR Value so we can work out the light level in the room.
-  int LDRbacklight = map(LDR, 0, 1023, 50, 250);    // Map the data from the LDR from 0-1023 (Max seen 1000) to var GLCDbrightness min/max
+  int LDRbacklight = map(LDR, 0, 1023, 20, 250);    // Map the data from the LDR from 0-1023 (Max seen 1000) to var GLCDbrightness min/max
   LDRbacklight = constrain(LDRbacklight, 0, 255);   // Constrain the value to make sure its a PWM value 0-255)
   glcd.backLight(LDRbacklight);  
 }
@@ -475,15 +499,13 @@ void loop()
     fastUpdate = millis();
     
     DateTime now = RTC.now();
-    int last_hour = hour;
+    byte last_hour = hour;
     hour = now.hour();
     minute = now.minute();
 
     // Daily reset
     if (last_hour == 23 && hour == 00)
     {
-      dailyEnergy = 0;                //reset Kwh/d counter at midnight
-
       // Reset MIN/MAX for all values
       for (int i= 0; i < MAPPING_TABLE.rows(); i++)
       {
@@ -511,8 +533,6 @@ void loop()
       }
     }
 
-    //currentPower = currentPower + (emontx.power1 - currentPower)*0.50;        //smooth transitions
-    
     glcd.clear();
     glcd.drawLine(63, 0, 63, 57, WHITE); // dividing line
 
@@ -558,9 +578,12 @@ void loop()
       }
     }
 
-    // Not sure what to do here!
+    // Show the time in the status bar
+    displayTime(hour, minute, 0, 59, FONT_SMALL, ALIGN_LEFT);
+
+    // Will do something more interesting here.
     fromFlash(LABEL_STATUS, str, BUFFER_SIZE);
-    displayString(str,64,59,FONT_SMALL, ALIGN_CENTRE);
+    displayString(str,64,59,FONT_SMALL,ALIGN_CENTRE);
 
     // A flashing dot to reassure display is updating
     if (animate2s)
