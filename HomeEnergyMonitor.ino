@@ -272,7 +272,7 @@ void displayTime(byte hour, byte minute, byte xpos, byte ypos, font_t font, alig
   if (hour < 10)
     strcat(str,"0");
   else
-    strcat(str," ");
+    strcat(str,"");
 
   itoa(hour,str2,10);
   strcat(str,str2);
