@@ -15,7 +15,7 @@ RTC_Millis RTC;
 
 const byte DISPLAY_ID       = 25; // Our ID (in case we send - no functionality currently)
 const byte INTERNAL1_ID     = 19; // The first internal EmonTH node
-const byte INTERNAL2_ID       = 20;
+const byte INTERNAL2_ID     = 20; // The second internal EmonTH node
 const byte EXTERNAL_ID      = 22; // The external EmonTH node
 const byte POWER_ID         = 10; // The EmonTX node
 const byte BASE_ID          = 15; // The Raspberry Pi base station (for receiving time updates)
@@ -28,26 +28,35 @@ const byte greenLED         = 6;         // Green tri-color LED
 const byte redLED           = 9;           // Red tri-color LED
 const byte LDRpin           = 4;           // analog pin of onboard lightsensor 
 
-const byte BUFFER_SIZE      =  16;     // Used for string buffer - max half screen width
-const byte BUFFER2_SIZE     = 4;      // Small buffer for the min/max
+const byte BUFFER_SIZE      =  17;     // Used for string buffer - max half screen width
+const byte BUFFER2_SIZE     =  5;      // Small buffer for the min/max
 const byte DISP_REFRESH_INTERVAL = 200;
 const float POWER_TO_ENERGY_FACTOR = ((float)DISP_REFRESH_INTERVAL / 1000.0) / 3600000;
 
 /* ====================================
 Strings stored in flash
 ==================================== */
-const prog_char LABEL_MIN[] PROGMEM = "MIN";
-const prog_char LABEL_MAX[] PROGMEM = "MAX";
-const prog_char LABEL_STATUS[] PROGMEM = "OPEN ENERGY MON";
-const prog_char LABEL_TIMEOUT[] PROGMEM = "TIMED OUT";
 
+// These are displayed in a 4 char long area
+// Looks very cluttweed with 4 chars
+const prog_char LABEL_MIN[] PROGMEM       = "MIN";
+const prog_char LABEL_MAX[] PROGMEM       = "MAX";
+
+// Displayed at bottom of screen, 16 char max
+const prog_char LABEL_STATUS[] PROGMEM    = "OPEN ENERGY MON";
+
+// Displayed instead of label when a node times out
+const prog_char LABEL_TIMEOUT[] PROGMEM   = "TIMED OUT";
+
+// Labels for the panes
+// These have a named index below - make sure to maintain both
 const prog_char LABEL_INTERNAL1[] PROGMEM = "LOUNGE TEMP";
 const prog_char LABEL_INTERNAL2[] PROGMEM = "BEDROOM TEMP";
-const prog_char LABEL_EXTERNAL[] PROGMEM = "OUTSIDE TEMP";
-const prog_char LABEL_POWER[] PROGMEM = "POWER";
-const prog_char LABEL_ENERGY[] PROGMEM = "ENERGY";
-const prog_char LABEL_VOLTAGE[] PROGMEM = "VOLTAGE";
-const prog_char LABEL_HUMIDITY[] PROGMEM = "HUMIDITY";
+const prog_char LABEL_EXTERNAL[] PROGMEM  = "OUTSIDE TEMP";
+const prog_char LABEL_POWER[] PROGMEM     = "POWER";
+const prog_char LABEL_ENERGY[] PROGMEM    = "ENERGY";
+const prog_char LABEL_VOLTAGE[] PROGMEM   = "VOLTAGE";
+const prog_char LABEL_HUMIDITY[] PROGMEM   = "HUMIDITY";
 const prog_char LABEL_NOTHING[] = "";
 
 // These need to be stored in the order they need to be displayed in the display
@@ -143,6 +152,24 @@ enum {
   X2_Y1
 };
 
+
+/* ====================================
+Mapping table - nodes to panels
+==================================== */
+// This holds all the details about the values we wish to display
+FLASH_TABLE(byte, MAPPING_TABLE, 7,
+// I_NODE_ID      I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS      I_NODE_LABEL      I_NODE_TIMEOUT
+  {POWER_ID,      NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER,       I_LABEL_POWER,    30},
+  {INTERNAL1_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE, I_LABEL_INTERNAL1, 180},
+  {EXTERNAL_ID,   NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE, I_LABEL_EXTERNAL, 180},
+  {INTERNAL2_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y1,            UNIT_TEMPERATURE, I_LABEL_INTERNAL2, 180},
+  //{POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X1_Y1,            UNIT_VOLTAGE,     I_LABEL_VOLTAGE,  30},
+  // ENERGY is summed from power.
+  // Provide the valuy you wish to sum as a position int he display i.e. the power panel
+  {ENERGY_ID,     NODE_NONE,    X0_Y0,                X0_Y1,            UNIT_ENERGY,      I_LABEL_ENERGY,   0},
+  {INTERNAL1_ID,  NODE_EMONTH,  VALUE_EMONTH_HUMIDITY,X2_Y1,            UNIT_PERCENTAGE,  I_LABEL_HUMIDITY, 180}
+  );
+
 // Used to index the MAPPING_TABLE
 enum {
   I_NODE_ID = 0,
@@ -153,20 +180,9 @@ enum {
   I_NODE_LABEL = 5,
   I_NODE_TIMEOUT = 6
 };
-
-// This holds all the details about the values we wish to display
-FLASH_TABLE(byte, MAPPING_TABLE, 7,
-// I_NODE_ID      I_NODE_TYPE   I_NODE_VALUE          I_NODE_POSITION   I_NODE_UNITS      I_NODE_LABEL      I_NODE_TIMEOUT
-  {POWER_ID,      NODE_EMONTX,  VALUE_EMONTX_POWER1,  X0_Y0,            UNIT_POWER,       I_LABEL_POWER,    30},
-  {INTERNAL1_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y0,            UNIT_TEMPERATURE, I_LABEL_INTERNAL1, 180},
-  {EXTERNAL_ID,   NODE_EMONTH,  VALUE_EMONTH_TEMP2,   X2_Y0,            UNIT_TEMPERATURE, I_LABEL_EXTERNAL, 180},
-  {INTERNAL2_ID,  NODE_EMONTH,  VALUE_EMONTH_TEMP1,   X1_Y1,            UNIT_TEMPERATURE, I_LABEL_INTERNAL2, 180},
-  //{POWER_ID,    NODE_EMONTX,  VALUE_EMONTX_VRMS,    X1_Y1,            UNIT_VOLTAGE,     I_LABEL_VOLTAGE,  30},
-  // ENERGY is summed from power.
-  // Provide the valuye you wish to sum as a position int he display i.e. the power panel
-  {ENERGY_ID,     NODE_NONE,    X0_Y0,                X0_Y1,            UNIT_ENERGY,      I_LABEL_ENERGY,   0},
-  {INTERNAL1_ID,  NODE_EMONTH,  VALUE_EMONTH_HUMIDITY,X2_Y1,            UNIT_PERCENTAGE,  I_LABEL_HUMIDITY, 180}
-  );
+/* ====================================
+End of mapping table
+==================================== */
 
 typedef struct {
   bool valid; // Have we received a reading yet? (also used to reset nightly values)
@@ -178,12 +194,14 @@ typedef struct {
 
 value_t values[6]; // values are linked to display panel
 
+// Represent the data sent from different node types
 typedef struct { int power1, power2, power3, power4, Vrms, temp; }  PayloadTX;
 typedef struct { int temp1, temp2, humidity, battery; }             PayloadTH;
 typedef struct { char node, hour, minute; }                         PayloadBase;
 
 byte hour = 12, minute = 0;
 
+// These are used to animate/flash different parts of the display
 byte animateCounter = 0;
 bool animate2s = false;
 bool animate4s = false;
@@ -244,6 +262,7 @@ void displayString(const char* str, byte xpos, byte ypos, font_t font, align_t a
   glcd.drawString(xpos,ypos,str); 
 }
 
+// Format time into a string and display
 void displayTime(byte hour, byte minute, byte xpos, byte ypos, font_t font, align_t align)
 {
   char str[6] = ""; // 00:00
@@ -462,6 +481,7 @@ void rf12_process()
   }
 }
 
+// Dim the backlight dependent on ambient
 void glcd_backlight()
 {
   int LDR = analogRead(LDRpin);                     // Read the LDR Value so we can work out the light level in the room.
@@ -571,6 +591,7 @@ void loop()
         }
         else
         {
+          // A touch hard to read but takes pointer from array and then reads string from flash
           fromFlash((const char*)pgm_read_word(&(VALUE_STRING_TABLE[labelIndex])),str,BUFFER_SIZE);
         }
 
@@ -586,6 +607,7 @@ void loop()
     displayString(str,64,59,FONT_SMALL,ALIGN_CENTRE);
 
     // A flashing dot to reassure display is updating
+    // Doesn't have anything to do with receiving RF but indicates memory issues or hangs
     if (animate2s)
       glcd.fillCircle(125,61,2,1);
 
@@ -595,7 +617,7 @@ void loop()
     glcd_backlight();
   } 
   
-  // Used for toggling slow animations on screen
+  // Used for toggling animations on screen
   if ((millis()-slowUpdate)>1000)
   {
     slowUpdate = millis();
