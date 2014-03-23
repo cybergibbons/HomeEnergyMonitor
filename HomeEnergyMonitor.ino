@@ -526,10 +526,18 @@ void loop()
     // Daily reset
     if (last_hour == 23 && hour == 00)
     {
-      // Reset MIN/MAX for all values
+      
       for (int i= 0; i < MAPPING_TABLE.rows(); i++)
       {
         byte position = MAPPING_TABLE[i][I_NODE_POSITION];
+
+        // Daily reset of summed energy values
+        if (MAPPING_TABLE[i][I_NODE_ID] == ENERGY_ID)
+        {
+          values[position].currentValue = 0;
+        }
+
+        // Reset MIN/MAX for all values
         values[position].valid = false;
       }
     }
