@@ -484,10 +484,9 @@ void rf12_process()
 // Dim the backlight dependent on ambient
 void glcd_backlight()
 {
-  int LDR = analogRead(LDRpin);                     // Read the LDR Value so we can work out the light level in the room.
-  int LDRbacklight = map(LDR, 0, 1023, 20, 250);    // Map the data from the LDR from 0-1023 (Max seen 1000) to var GLCDbrightness min/max
-  LDRbacklight = constrain(LDRbacklight, 0, 255);   // Constrain the value to make sure its a PWM value 0-255)
-  glcd.backLight(LDRbacklight);  
+  int LDR = analogRead(LDRpin);    
+  int LDRbacklight = (LDR >> 2) + 50;
+  LDRbacklight = LDRbacklight > 255 ? 255 : LDRbacklight;   
 }
 
 void setup()
